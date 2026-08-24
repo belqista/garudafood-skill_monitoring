@@ -1,0 +1,27 @@
+# XAMPP / local
+xampp/
+*.log
+
+# Environment / database credentials
+.env
+.env.*
+config/database.php
+
+# Upload pengguna
+uploads/*
+!uploads/.gitkeep
+
+# Temporary files
+*.tmp
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Composer
+/vendor/
