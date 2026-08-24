@@ -89,8 +89,6 @@ if ($q) {
    - Skill aktif
    - Assessment tahun terbaru
    - Ada minimal satu nilai <= 2.5
-
-   Dibuat konsisten dengan halaman Kebutuhan Training.
 ========================================================= */
 
 $training_workers = 0;
@@ -100,14 +98,16 @@ if ($latest_year !== null) {
 
     $latestYearSafe = (int)$latest_year;
 
+
     /* =====================================================
-       JUMLAH PEKERJA
+       JUMLAH PEKERJA DENGAN NILAI <= 2.5
     ====================================================== */
 
     $q = $conn->query("
         SELECT COUNT(*) AS n
         FROM (
             SELECT p.id
+
             FROM pekerja p
 
             INNER JOIN penilaian_skill ps
@@ -128,15 +128,21 @@ if ($latest_year !== null) {
     ");
 
     if ($q) {
-        $training_workers = (int)($q->fetch_assoc()['n'] ?? 0);
+        $training_workers = (int)(
+            $q->fetch_assoc()['n'] ?? 0
+        );
     }
 
 
     /* =====================================================
-       DAFTAR PEKERJA DENGAN NILAI <= 2.5
+       DAFTAR PEKERJA NILAI <= 2.5
 
-       Ditampilkan maksimal 8 orang di dashboard.
-       Prioritas: nilai terendah -> jumlah gap terbanyak -> nama.
+       Keterangan ditambahkan dari:
+       p.keterangan
+
+       Contoh:
+       Budi Santoso
+       No. Reg: 12345 • Departemen: Teknik PSPD, PDP, PGMJ • Crew B
     ====================================================== */
 
     $qTrainingPeople = $conn->query("
@@ -145,14 +151,20 @@ if ($latest_year !== null) {
             p.no_reg,
             p.nama,
             p.departemen,
+            p.keterangan,
 
-            ROUND(MIN(ps.nilai), 2) AS nilai_min,
+            ROUND(
+                MIN(ps.nilai),
+                2
+            ) AS nilai_min,
 
             COUNT(ps.id) AS jumlah_gap,
 
             GROUP_CONCAT(
                 DISTINCT s.nama_skill
-                ORDER BY ps.nilai ASC, s.nama_skill ASC
+                ORDER BY
+                    ps.nilai ASC,
+                    s.nama_skill ASC
                 SEPARATOR ', '
             ) AS skill_gap
 
@@ -175,7 +187,8 @@ if ($latest_year !== null) {
             p.id,
             p.no_reg,
             p.nama,
-            p.departemen
+            p.departemen,
+            p.keterangan
 
         ORDER BY
             nilai_min ASC,
@@ -186,8 +199,14 @@ if ($latest_year !== null) {
     ");
 
     if ($qTrainingPeople) {
-        while ($trainingRow = $qTrainingPeople->fetch_assoc()) {
-            $training_people[] = $trainingRow;
+
+        while (
+            $trainingRow =
+            $qTrainingPeople->fetch_assoc()
+        ) {
+
+            $training_people[] =
+                $trainingRow;
         }
     }
 }
@@ -206,12 +225,18 @@ if ($latest_year !== null) {
     $q = $conn->query("
         SELECT
             ROUND(AVG(nilai), 2) AS a
+
         FROM penilaian_skill
-        WHERE tahun = {$latestYearSafe}
+
+        WHERE
+            tahun = {$latestYearSafe}
     ");
 
     if ($q) {
-        $avg = (float)($q->fetch_assoc()['a'] ?? 0);
+
+        $avg = (float)(
+            $q->fetch_assoc()['a'] ?? 0
+        );
     }
 }
 
@@ -264,7 +289,8 @@ $development_sql = "
         p.nama ASC
 ";
 
-$development_people = $conn->query($development_sql);
+$development_people =
+    $conn->query($development_sql);
 
 
 /* =========================================================
@@ -292,9 +318,11 @@ if ($chart) {
 
     while ($r = $chart->fetch_assoc()) {
 
-        $labels[] = $r['tahun'];
+        $labels[] =
+            $r['tahun'];
 
-        $vals[] = (float)$r['avg_nilai'];
+        $vals[] =
+            (float)$r['avg_nilai'];
     }
 }
 
@@ -322,6 +350,7 @@ if ($development_people) {
             $r['y26'] !== null &&
             $r['y26'] !== '';
 
+
         if ($has25 && $has26) {
 
             $delta =
@@ -337,52 +366,71 @@ if ($development_people) {
 
         if ($delta === null) {
 
-            $statusClass = 'status-mid';
-            $statusText  = 'Belum Lengkap';
+            $statusClass =
+                'status-mid';
+
+            $statusText =
+                'Belum Lengkap';
 
             $total_belum++;
 
         } elseif ($delta > 0) {
 
-            $statusClass = 'status-good';
-            $statusText  = 'Meningkat';
+            $statusClass =
+                'status-good';
+
+            $statusText =
+                'Meningkat';
 
             $total_meningkat++;
 
         } elseif ($delta < 0) {
 
-            $statusClass = 'status-bad';
-            $statusText  = 'Menurun';
+            $statusClass =
+                'status-bad';
+
+            $statusText =
+                'Menurun';
 
             $total_menurun++;
 
         } else {
 
-            $statusClass = 'status-mid';
-            $statusText  = 'Tetap';
+            $statusClass =
+                'status-mid';
+
+            $statusText =
+                'Tetap';
 
             $total_tetap++;
         }
 
 
-        $r['delta']       = $delta;
-        $r['statusClass'] = $statusClass;
-        $r['statusText']  = $statusText;
+        $r['delta'] =
+            $delta;
 
-        $development_data[] = $r;
+        $r['statusClass'] =
+            $statusClass;
+
+        $r['statusText'] =
+            $statusText;
+
+        $development_data[] =
+            $r;
     }
 }
 
 
 /* =========================================================
-   BATASI DATA YANG DITAMPILKAN DI DASHBOARD
+   BATASI DATA YANG DITAMPILKAN
 ========================================================= */
 
-$development_preview = array_slice(
-    $development_data,
-    0,
-    8
-);
+$development_preview =
+    array_slice(
+        $development_data,
+        0,
+        8
+    );
 
 
 /* =========================================================
@@ -430,9 +478,11 @@ $total_development =
 
 body {
 
-    background: var(--gf-bg) !important;
+    background:
+        var(--gf-bg) !important;
 
-    color: var(--gf-text);
+    color:
+        var(--gf-text);
 
     font-family:
         "Poppins",
@@ -444,7 +494,8 @@ body {
 
 .main-content {
 
-    background: var(--gf-bg) !important;
+    background:
+        var(--gf-bg) !important;
 }
 
 
@@ -454,13 +505,17 @@ body {
 
 .dashboard-heading {
 
-    position: relative;
+    position:
+        relative;
 
-    margin-bottom: 25px;
+    margin-bottom:
+        25px;
 
-    padding: 25px 28px;
+    padding:
+        25px 28px;
 
-    border-radius: 18px;
+    border-radius:
+        18px;
 
     background:
         linear-gradient(
@@ -470,127 +525,172 @@ body {
             #164b8f 100%
         );
 
-    border: 1px solid rgba(255,255,255,.08);
+    border:
+        1px solid
+        rgba(255,255,255,.08);
 
     box-shadow:
         0 10px 30px
         rgba(9,47,99,.18);
 
-    overflow: hidden;
+    overflow:
+        hidden;
 }
 
 
 .dashboard-heading::before {
 
-    content: "";
+    content:
+        "";
 
-    position: absolute;
+    position:
+        absolute;
 
-    width: 230px;
+    width:
+        230px;
 
-    height: 230px;
+    height:
+        230px;
 
-    border-radius: 50%;
+    border-radius:
+        50%;
 
-    right: -80px;
+    right:
+        -80px;
 
-    top: -130px;
+    top:
+        -130px;
 
     background:
         rgba(255,255,255,.055);
 
-    pointer-events: none;
+    pointer-events:
+        none;
 }
 
 
 .dashboard-heading::after {
 
-    content: "";
+    content:
+        "";
 
-    position: absolute;
+    position:
+        absolute;
 
-    width: 170px;
+    width:
+        170px;
 
-    height: 170px;
+    height:
+        170px;
 
-    border-radius: 50%;
+    border-radius:
+        50%;
 
-    right: 70px;
+    right:
+        70px;
 
-    bottom: -125px;
+    bottom:
+        -125px;
 
     background:
         rgba(255,255,255,.035);
 
-    pointer-events: none;
+    pointer-events:
+        none;
 }
 
 
 .dashboard-eyebrow {
 
-    position: relative;
+    position:
+        relative;
 
-    z-index: 2;
+    z-index:
+        2;
 
-    display: inline-flex;
+    display:
+        inline-flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    gap: 7px;
+    gap:
+        7px;
 
-    color: #dceaff;
+    color:
+        #dceaff;
 
-    font-size: 12px;
+    font-size:
+        12px;
 
-    font-weight: 700;
+    font-weight:
+        700;
 
-    text-transform: uppercase;
+    text-transform:
+        uppercase;
 
-    letter-spacing: .08em;
+    letter-spacing:
+        .08em;
 
-    margin-bottom: 8px;
+    margin-bottom:
+        8px;
 }
 
 
 .dashboard-eyebrow i {
 
-    color: #ffffff;
+    color:
+        #ffffff;
 
-    font-size: 14px;
+    font-size:
+        14px;
 }
 
 
 .dashboard-title {
 
-    position: relative;
+    position:
+        relative;
 
-    z-index: 2;
+    z-index:
+        2;
 
-    margin: 0;
+    margin:
+        0;
 
-    font-size: 28px;
+    font-size:
+        28px;
 
-    line-height: 1.2;
+    line-height:
+        1.2;
 
-    font-weight: 750;
+    font-weight:
+        750;
 
-    color: #ffffff;
+    color:
+        #ffffff;
 }
 
 
 .dashboard-description {
 
-    position: relative;
+    position:
+        relative;
 
-    z-index: 2;
+    z-index:
+        2;
 
-    margin-top: 8px;
+    margin-top:
+        8px;
 
-    color: rgba(255,255,255,.78);
+    color:
+        rgba(255,255,255,.78);
 
-    font-size: 13px;
+    font-size:
+        13px;
 
-    max-width: 900px;
+    max-width:
+        900px;
 }
 
 
@@ -600,20 +700,28 @@ body {
 
 .stat-card {
 
-    position: relative;
+    position:
+        relative;
 
-    min-height: 132px;
+    min-height:
+        132px;
 
-    padding: 22px;
+    padding:
+        22px;
 
-    background: #ffffff;
+    background:
+        #ffffff;
 
-    border: 1px solid var(--gf-border);
+    border:
+        1px solid
+        var(--gf-border);
 
-    border-radius: 17px;
+    border-radius:
+        17px;
 
     box-shadow:
-        0 5px 20px rgba(20,43,76,.045);
+        0 5px 20px
+        rgba(20,43,76,.045);
 
     transition:
         transform .2s ease,
@@ -624,86 +732,114 @@ body {
 
 .stat-card:hover {
 
-    transform: translateY(-3px);
+    transform:
+        translateY(-3px);
 
-    border-color: #d7e1ef;
+    border-color:
+        #d7e1ef;
 
     box-shadow:
-        0 10px 28px rgba(20,43,76,.10);
+        0 10px 28px
+        rgba(20,43,76,.10);
 }
 
 
 .stat-card-link {
 
-    display: block;
+    display:
+        block;
 
-    color: inherit;
+    color:
+        inherit;
 
-    text-decoration: none;
+    text-decoration:
+        none;
 }
 
 
 .stat-card-link:hover {
 
-    color: inherit;
+    color:
+        inherit;
 
-    text-decoration: none;
+    text-decoration:
+        none;
 }
 
 
 .stat-label {
 
-    color: #7a8494;
+    color:
+        #7a8494;
 
-    font-size: 11px;
+    font-size:
+        11px;
 
-    font-weight: 700;
+    font-weight:
+        700;
 
-    letter-spacing: .06em;
+    letter-spacing:
+        .06em;
 
-    margin-bottom: 7px;
+    margin-bottom:
+        7px;
 }
 
 
 .stat-value {
 
-    color: #172033;
+    color:
+        #172033;
 
-    font-size: 28px;
+    font-size:
+        28px;
 
-    font-weight: 750;
+    font-weight:
+        750;
 
-    line-height: 1.1;
+    line-height:
+        1.1;
 }
 
 
 .stat-value small {
 
-    color: #8b95a4;
+    color:
+        #8b95a4;
 
-    font-weight: 500;
+    font-weight:
+        500;
 }
 
 
 .stat-icon {
 
-    width: 46px;
+    width:
+        46px;
 
-    height: 46px;
+    height:
+        46px;
 
-    display: flex;
+    display:
+        flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    justify-content: center;
+    justify-content:
+        center;
 
-    border-radius: 13px;
+    border-radius:
+        13px;
 
-    background: var(--gf-blue-light);
+    background:
+        var(--gf-blue-light);
 
-    color: var(--gf-blue);
+    color:
+        var(--gf-blue);
 
-    font-size: 19px;
+    font-size:
+        19px;
 }
 
 
@@ -713,34 +849,45 @@ body {
 
 .cardx {
 
-    background: #ffffff;
+    background:
+        #ffffff;
 
-    border: 1px solid var(--gf-border);
+    border:
+        1px solid
+        var(--gf-border);
 
-    border-radius: 17px;
+    border-radius:
+        17px;
 
-    padding: 21px;
+    padding:
+        21px;
 
     box-shadow:
-        0 5px 20px rgba(20,43,76,.045);
+        0 5px 20px
+        rgba(20,43,76,.045);
 }
 
 
 .card-title {
 
-    color: #172033;
+    color:
+        #172033;
 
-    font-size: 14px;
+    font-size:
+        14px;
 
-    font-weight: 750;
+    font-weight:
+        750;
 }
 
 
 .section-note {
 
-    color: #8a94a4;
+    color:
+        #8a94a4;
 
-    font-size: 12px;
+    font-size:
+        12px;
 }
 
 
@@ -757,36 +904,50 @@ body {
             #ffffff
         );
 
-    border: 1px solid #f5d6d9;
+    border:
+        1px solid
+        #f5d6d9;
 
-    border-radius: 17px;
+    border-radius:
+        17px;
 
-    padding: 20px;
+    padding:
+        20px;
 
     box-shadow:
-        0 5px 20px rgba(150,30,45,.04);
+        0 5px 20px
+        rgba(150,30,45,.04);
 }
 
 
 .training-alert-icon {
 
-    width: 46px;
+    width:
+        46px;
 
-    height: 46px;
+    height:
+        46px;
 
-    border-radius: 13px;
+    border-radius:
+        13px;
 
-    display: flex;
+    display:
+        flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    justify-content: center;
+    justify-content:
+        center;
 
-    background: var(--gf-red-bg);
+    background:
+        var(--gf-red-bg);
 
-    color: var(--gf-red);
+    color:
+        var(--gf-red);
 
-    font-size: 20px;
+    font-size:
+        20px;
 }
 
 
@@ -795,134 +956,311 @@ body {
 ========================================================= */
 
 .low-score-card {
-    background: #ffffff;
-    border: 1px solid #f1d6d9;
-    border-radius: 17px;
-    padding: 21px;
-    box-shadow: 0 5px 20px rgba(150,30,45,.045);
+
+    background:
+        #ffffff;
+
+    border:
+        1px solid
+        #f1d6d9;
+
+    border-radius:
+        17px;
+
+    padding:
+        21px;
+
+    box-shadow:
+        0 5px 20px
+        rgba(150,30,45,.045);
 }
+
 
 .low-score-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 15px;
-    flex-wrap: wrap;
+
+    display:
+        flex;
+
+    align-items:
+        flex-start;
+
+    justify-content:
+        space-between;
+
+    gap:
+        15px;
+
+    flex-wrap:
+        wrap;
 }
+
 
 .low-score-title {
-    color: #842029;
-    font-size: 14px;
-    font-weight: 750;
+
+    color:
+        #842029;
+
+    font-size:
+        14px;
+
+    font-weight:
+        750;
 }
+
 
 .low-score-note {
-    color: #8a6468;
-    font-size: 12px;
-    margin-top: 3px;
+
+    color:
+        #8a6468;
+
+    font-size:
+        12px;
+
+    margin-top:
+        3px;
 }
+
 
 .low-score-count {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 9px;
-    border-radius: 7px;
-    background: #ffecee;
-    color: #dc3545;
-    font-size: 10px;
-    font-weight: 750;
-    white-space: nowrap;
+
+    display:
+        inline-flex;
+
+    align-items:
+        center;
+
+    gap:
+        5px;
+
+    padding:
+        5px 9px;
+
+    border-radius:
+        7px;
+
+    background:
+        #ffecee;
+
+    color:
+        #dc3545;
+
+    font-size:
+        10px;
+
+    font-weight:
+        750;
+
+    white-space:
+        nowrap;
 }
+
 
 .low-score-table {
-    width: 100%;
-    margin: 15px 0 0;
+
+    width:
+        100%;
+
+    margin:
+        15px 0 0;
 }
+
 
 .low-score-table thead th {
-    background: #fff8f8;
-    color: #8a6468;
-    font-size: 9px;
-    font-weight: 750;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    padding: 9px 8px;
-    border-bottom: 1px solid #f1dfe1;
-    white-space: nowrap;
+
+    background:
+        #fff8f8;
+
+    color:
+        #8a6468;
+
+    font-size:
+        9px;
+
+    font-weight:
+        750;
+
+    text-transform:
+        uppercase;
+
+    letter-spacing:
+        .04em;
+
+    padding:
+        9px 8px;
+
+    border-bottom:
+        1px solid
+        #f1dfe1;
+
+    white-space:
+        nowrap;
 }
+
 
 .low-score-table tbody td {
-    color: #384457;
-    font-size: 11px;
-    padding: 10px 8px;
-    border-bottom: 1px solid #f1f3f5;
-    vertical-align: middle;
+
+    color:
+        #384457;
+
+    font-size:
+        11px;
+
+    padding:
+        10px 8px;
+
+    border-bottom:
+        1px solid
+        #f1f3f5;
+
+    vertical-align:
+        middle;
 }
+
 
 .low-score-table tbody tr:last-child td {
-    border-bottom: 0;
+
+    border-bottom:
+        0;
 }
+
 
 .low-score-table tbody tr:hover {
-    background: #fffafa;
+
+    background:
+        #fffafa;
 }
+
 
 .low-score-worker {
-    color: #172033;
-    font-weight: 700;
-    text-decoration: none;
-    display: block;
+
+    color:
+        #172033;
+
+    font-weight:
+        700;
+
+    text-decoration:
+        none;
+
+    display:
+        block;
 }
+
 
 .low-score-worker:hover {
-    color: #123f7a;
+
+    color:
+        #123f7a;
 }
+
 
 .low-score-meta {
-    color: #8a94a4;
-    font-size: 9px;
-    margin-top: 2px;
+
+    color:
+        #8a94a4;
+
+    font-size:
+        9px;
+
+    margin-top:
+        3px;
+
+    line-height:
+        1.7;
 }
+
 
 .low-score-value {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 40px;
-    padding: 5px 7px;
-    border-radius: 7px;
-    background: #ffecee;
-    color: #dc3545;
-    font-size: 11px;
-    font-weight: 800;
+
+    display:
+        inline-flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        center;
+
+    min-width:
+        40px;
+
+    padding:
+        5px 7px;
+
+    border-radius:
+        7px;
+
+    background:
+        #ffecee;
+
+    color:
+        #dc3545;
+
+    font-size:
+        11px;
+
+    font-weight:
+        800;
 }
+
 
 .low-score-gap {
-    color: #dc3545;
-    font-size: 10px;
-    font-weight: 700;
+
+    color:
+        #dc3545;
+
+    font-size:
+        10px;
+
+    font-weight:
+        700;
 }
+
 
 .low-score-skills {
-    color: #66758a;
-    font-size: 10px;
-    line-height: 1.5;
-    max-width: 430px;
+
+    color:
+        #66758a;
+
+    font-size:
+        10px;
+
+    line-height:
+        1.5;
+
+    max-width:
+        430px;
 }
+
 
 .low-score-empty {
-    text-align: center;
-    padding: 25px 15px;
-    color: #198754;
-    font-size: 12px;
+
+    text-align:
+        center;
+
+    padding:
+        25px 15px;
+
+    color:
+        #198754;
+
+    font-size:
+        12px;
 }
 
+
 .low-score-empty i {
-    display: block;
-    font-size: 26px;
-    margin-bottom: 6px;
+
+    display:
+        block;
+
+    font-size:
+        26px;
+
+    margin-bottom:
+        6px;
 }
+
 
 /* =========================================================
    CHART
@@ -930,11 +1268,14 @@ body {
 
 .chart-wrapper {
 
-    position: relative;
+    position:
+        relative;
 
-    width: 100%;
+    width:
+        100%;
 
-    height: 280px;
+    height:
+        280px;
 }
 
 
@@ -944,85 +1285,112 @@ body {
 
 .development-table {
 
-    margin: 0;
+    margin:
+        0;
 }
 
 
 .development-table thead th {
 
-    border-top: 0;
+    border-top:
+        0;
 
-    border-bottom: 1px solid #e3e8ef;
+    border-bottom:
+        1px solid
+        #e3e8ef;
 
-    color: #7d8796;
+    color:
+        #7d8796;
 
-    font-size: 9px;
+    font-size:
+        9px;
 
-    font-weight: 750;
+    font-weight:
+        750;
 
-    text-transform: uppercase;
+    text-transform:
+        uppercase;
 
-    letter-spacing: .04em;
+    letter-spacing:
+        .04em;
 
     padding:
         10px 7px;
 
-    white-space: nowrap;
+    white-space:
+        nowrap;
 }
 
 
 .development-table tbody td {
 
-    border-bottom: 1px solid #edf0f4;
+    border-bottom:
+        1px solid
+        #edf0f4;
 
-    color: #384457;
+    color:
+        #384457;
 
-    font-size: 11px;
+    font-size:
+        11px;
 
     padding:
         11px 7px;
 
-    vertical-align: middle;
+    vertical-align:
+        middle;
 }
 
 
 .development-table tbody tr:last-child td {
 
-    border-bottom: 0;
+    border-bottom:
+        0;
 }
 
 
 .development-table tbody tr:hover {
 
-    background: #fafbfd;
+    background:
+        #fafbfd;
 }
 
 
 .development-worker {
 
-    color: #16223a;
+    color:
+        #16223a;
 
-    font-weight: 650;
+    font-weight:
+        650;
 
-    text-decoration: none;
+    text-decoration:
+        none;
 
-    display: block;
+    display:
+        block;
 
-    max-width: 130px;
+    max-width:
+        130px;
 
-    white-space: nowrap;
+    white-space:
+        nowrap;
 
-    overflow: hidden;
+    overflow:
+        hidden;
 
-    text-overflow: ellipsis;
+    text-overflow:
+        ellipsis;
 }
 
 
 .development-worker:hover {
 
-    color: var(--gf-blue);
+    color:
+        var(--gf-blue);
 
-    text-decoration: underline;
+    text-decoration:
+        underline;
 }
 
 
@@ -1032,33 +1400,41 @@ body {
 
 .change-up {
 
-    color: #198754;
+    color:
+        #198754;
 
-    font-weight: 800;
+    font-weight:
+        800;
 }
 
 
 .change-down {
 
-    color: #dc3545;
+    color:
+        #dc3545;
 
-    font-weight: 800;
+    font-weight:
+        800;
 }
 
 
 .change-same {
 
-    color: #6c757d;
+    color:
+        #6c757d;
 
-    font-weight: 800;
+    font-weight:
+        800;
 }
 
 
 .change-empty {
 
-    color: #9aa3af;
+    color:
+        #9aa3af;
 
-    font-weight: 600;
+    font-weight:
+        600;
 }
 
 
@@ -1068,46 +1444,59 @@ body {
 
 .badge-status {
 
-    display: inline-flex;
+    display:
+        inline-flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    justify-content: center;
+    justify-content:
+        center;
 
     padding:
         4px 7px;
 
-    border-radius: 6px;
+    border-radius:
+        6px;
 
-    font-size: 9px;
+    font-size:
+        9px;
 
-    font-weight: 700;
+    font-weight:
+        700;
 
-    white-space: nowrap;
+    white-space:
+        nowrap;
 }
 
 
 .status-good {
 
-    background: var(--gf-green-bg);
+    background:
+        var(--gf-green-bg);
 
-    color: var(--gf-green);
+    color:
+        var(--gf-green);
 }
 
 
 .status-bad {
 
-    background: var(--gf-red-bg);
+    background:
+        var(--gf-red-bg);
 
-    color: var(--gf-red);
+    color:
+        var(--gf-red);
 }
 
 
 .status-mid {
 
-    background: #f1f3f5;
+    background:
+        #f1f3f5;
 
-    color: #495057;
+    color:
+        #495057;
 }
 
 
@@ -1117,56 +1506,72 @@ body {
 
 .development-summary {
 
-    display: flex;
+    display:
+        flex;
 
-    gap: 7px;
+    gap:
+        7px;
 
-    flex-wrap: wrap;
+    flex-wrap:
+        wrap;
 
-    margin-top: 13px;
+    margin-top:
+        13px;
 }
 
 
 .development-summary-item {
 
-    display: inline-flex;
+    display:
+        inline-flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    gap: 5px;
+    gap:
+        5px;
 
     padding:
         5px 8px;
 
-    border-radius: 6px;
+    border-radius:
+        6px;
 
-    font-size: 9px;
+    font-size:
+        9px;
 
-    font-weight: 700;
+    font-weight:
+        700;
 }
 
 
 .summary-up {
 
-    background: #e9f8f0;
+    background:
+        #e9f8f0;
 
-    color: #198754;
+    color:
+        #198754;
 }
 
 
 .summary-down {
 
-    background: #ffecee;
+    background:
+        #ffecee;
 
-    color: #dc3545;
+    color:
+        #dc3545;
 }
 
 
 .summary-same {
 
-    background: #f1f3f5;
+    background:
+        #f1f3f5;
 
-    color: #495057;
+    color:
+        #495057;
 }
 
 
@@ -1176,21 +1581,27 @@ body {
 
 .btn-primary {
 
-    background: var(--gf-blue-dark) !important;
+    background:
+        var(--gf-blue-dark) !important;
 
-    border-color: var(--gf-blue-dark) !important;
+    border-color:
+        var(--gf-blue-dark) !important;
 
-    font-weight: 600;
+    font-weight:
+        600;
 
-    border-radius: 9px;
+    border-radius:
+        9px;
 }
 
 
 .btn-primary:hover {
 
-    background: var(--gf-blue-hover) !important;
+    background:
+        var(--gf-blue-hover) !important;
 
-    border-color: var(--gf-blue-hover) !important;
+    border-color:
+        var(--gf-blue-hover) !important;
 }
 
 
@@ -1200,25 +1611,33 @@ body {
 
 .development-empty {
 
-    text-align: center;
+    text-align:
+        center;
 
-    padding: 35px 15px;
+    padding:
+        35px 15px;
 
-    color: #8a94a4;
+    color:
+        #8a94a4;
 
-    font-size: 12px;
+    font-size:
+        12px;
 }
 
 
 .development-empty i {
 
-    font-size: 30px;
+    font-size:
+        30px;
 
-    display: block;
+    display:
+        block;
 
-    margin-bottom: 8px;
+    margin-bottom:
+        8px;
 
-    color: #aab3bf;
+    color:
+        #aab3bf;
 }
 
 
@@ -1228,80 +1647,109 @@ body {
 
 .system-flow {
 
-    display: flex;
+    display:
+        flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    gap: 10px;
+    gap:
+        10px;
 
-    margin-top: 20px;
+    margin-top:
+        20px;
 
-    overflow-x: auto;
+    overflow-x:
+        auto;
 
-    padding-bottom: 3px;
+    padding-bottom:
+        3px;
 }
 
 
 .flow-item {
 
-    min-width: 145px;
+    min-width:
+        145px;
 
-    padding: 14px 15px;
+    padding:
+        14px 15px;
 
-    border: 1px solid #e4e9f0;
+    border:
+        1px solid
+        #e4e9f0;
 
-    border-radius: 12px;
+    border-radius:
+        12px;
 
-    background: #fafbfd;
+    background:
+        #fafbfd;
 
-    text-align: center;
+    text-align:
+        center;
 }
 
 
 .flow-number {
 
-    width: 27px;
+    width:
+        27px;
 
-    height: 27px;
+    height:
+        27px;
 
     margin:
         0 auto 8px;
 
-    display: flex;
+    display:
+        flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    justify-content: center;
+    justify-content:
+        center;
 
-    border-radius: 50%;
+    border-radius:
+        50%;
 
-    background: var(--gf-blue);
+    background:
+        var(--gf-blue);
 
-    color: #ffffff;
+    color:
+        #ffffff;
 
-    font-size: 11px;
+    font-size:
+        11px;
 
-    font-weight: 700;
+    font-weight:
+        700;
 }
 
 
 .flow-title {
 
-    font-size: 11px;
+    font-size:
+        11px;
 
-    font-weight: 700;
+    font-weight:
+        700;
 
-    color: #26344b;
+    color:
+        #26344b;
 }
 
 
 .flow-arrow {
 
-    color: #a5adba;
+    color:
+        #a5adba;
 
-    font-size: 17px;
+    font-size:
+        17px;
 
-    flex-shrink: 0;
+    flex-shrink:
+        0;
 }
 
 
@@ -1313,14 +1761,15 @@ body {
 
     .dashboard-title {
 
-        font-size: 24px;
+        font-size:
+            24px;
     }
 
     .chart-wrapper {
 
-        height: 240px;
+        height:
+            240px;
     }
-
 }
 
 
@@ -1328,63 +1777,85 @@ body {
 
     .dashboard-heading {
 
-        padding: 20px;
+        padding:
+            20px;
 
-        border-radius: 15px;
+        border-radius:
+            15px;
 
-        margin-bottom: 20px;
+        margin-bottom:
+            20px;
     }
 
     .dashboard-title {
 
-        font-size: 22px;
+        font-size:
+            22px;
     }
 
     .dashboard-description {
 
-        font-size: 12px;
+        font-size:
+            12px;
 
-        line-height: 1.6;
+        line-height:
+            1.6;
     }
 
     .stat-card {
 
-        min-height: 118px;
+        min-height:
+            118px;
 
-        padding: 17px;
+        padding:
+            17px;
     }
 
     .stat-value {
 
-        font-size: 23px;
+        font-size:
+            23px;
     }
 
     .cardx {
 
-        padding: 17px;
+        padding:
+            17px;
 
-        border-radius: 14px;
+        border-radius:
+            14px;
     }
 
     .low-score-card {
-        padding: 15px;
-        border-radius: 14px;
+
+        padding:
+            15px;
+
+        border-radius:
+            14px;
     }
 
     .low-score-table {
-        min-width: 680px;
+
+        min-width:
+            680px;
     }
 
     .low-score-table thead th,
     .low-score-table tbody td {
-        padding: 8px 7px;
-        font-size: 10px;
+
+        padding:
+            8px 7px;
+
+        font-size:
+            10px;
     }
 
     .low-score-skills {
-        max-width: 300px;
-    }
 
+        max-width:
+            300px;
+    }
 }
 
 </style>
@@ -1425,9 +1896,7 @@ body {
 
 
     <h1 class="dashboard-title">
-
         Dashboard
-
     </h1>
 
 
@@ -1460,7 +1929,13 @@ body {
 
             <div class="stat-card">
 
-                <div class="d-flex justify-content-between align-items-start">
+                <div
+                    class="
+                        d-flex
+                        justify-content-between
+                        align-items-start
+                    "
+                >
 
                     <div>
 
@@ -1501,7 +1976,13 @@ body {
 
             <div class="stat-card">
 
-                <div class="d-flex justify-content-between align-items-start">
+                <div
+                    class="
+                        d-flex
+                        justify-content-between
+                        align-items-start
+                    "
+                >
 
                     <div>
 
@@ -1511,7 +1992,10 @@ body {
 
                         <div class="stat-value">
 
-                            <?= number_format($avg, 2) ?>
+                            <?= number_format(
+                                $avg,
+                                2
+                            ) ?>
 
                             <small class="fs-6">
                                 / 5
@@ -1548,7 +2032,13 @@ body {
 
             <div class="stat-card">
 
-                <div class="d-flex justify-content-between align-items-start">
+                <div
+                    class="
+                        d-flex
+                        justify-content-between
+                        align-items-start
+                    "
+                >
 
                     <div>
 
@@ -1557,7 +2047,9 @@ body {
                         </div>
 
                         <div class="stat-value">
-                            <?= number_format($training_workers) ?>
+                            <?= number_format(
+                                $training_workers
+                            ) ?>
                         </div>
 
                     </div>
@@ -1595,7 +2087,13 @@ body {
 
             <div class="stat-card">
 
-                <div class="d-flex justify-content-between align-items-start">
+                <div
+                    class="
+                        d-flex
+                        justify-content-between
+                        align-items-start
+                    "
+                >
 
                     <div>
 
@@ -1604,7 +2102,9 @@ body {
                         </div>
 
                         <div class="stat-value">
-                            <?= number_format($trainings) ?>
+                            <?= number_format(
+                                $trainings
+                            ) ?>
                         </div>
 
                     </div>
@@ -1639,7 +2139,14 @@ body {
 
 <div class="training-alert mb-4">
 
-    <div class="d-flex align-items-center gap-3 flex-wrap">
+    <div
+        class="
+            d-flex
+            align-items-center
+            gap-3
+            flex-wrap
+        "
+    >
 
         <div class="training-alert-icon">
 
@@ -1677,7 +2184,9 @@ body {
                 <?php if ($latest_year !== null): ?>
 
                     Assessment tahun
-                    <strong><?= $latest_year ?></strong>.
+                    <strong>
+                        <?= $latest_year ?>
+                    </strong>.
 
                 <?php else: ?>
 
@@ -1715,130 +2224,371 @@ body {
     <div class="low-score-header">
 
         <div>
+
             <div class="low-score-title">
-                <i class="bi bi-person-exclamation me-1"></i>
+
+                <i
+                    class="bi bi-person-exclamation me-1"
+                ></i>
+
                 Pekerja dengan Nilai ≤ 2,5
+
             </div>
+
 
             <div class="low-score-note">
-                Daftar pekerja yang memiliki minimal satu skill dengan nilai ≤ 2,5 pada assessment terbaru.
+
+                Daftar pekerja yang memiliki minimal satu
+                skill dengan nilai ≤ 2,5 pada assessment
+                terbaru.
+
             </div>
+
         </div>
 
-        <div class="d-flex align-items-center gap-2 flex-wrap">
+
+        <div
+            class="
+                d-flex
+                align-items-center
+                gap-2
+                flex-wrap
+            "
+        >
 
             <?php if ($latest_year !== null): ?>
-                <span class="badge-status" style="background:#eaf2ff;color:#123f7a;">
+
+                <span
+                    class="badge-status"
+                    style="
+                        background:#eaf2ff;
+                        color:#123f7a;
+                    "
+                >
+
                     <i class="bi bi-calendar3 me-1"></i>
+
                     <?= $latest_year ?>
+
                 </span>
+
             <?php endif; ?>
 
+
             <span class="low-score-count">
+
                 <i class="bi bi-people-fill"></i>
-                <?= number_format($training_workers) ?> Pekerja
+
+                <?= number_format(
+                    $training_workers
+                ) ?>
+
+                Pekerja
+
             </span>
 
         </div>
 
     </div>
 
+
     <?php if (!empty($training_people)): ?>
 
         <div class="table-responsive">
-            <table class="table low-score-table">
+
+            <table
+                class="
+                    table
+                    low-score-table
+                "
+            >
 
                 <thead>
+
                     <tr>
-                        <th>Pekerja</th>
-                        <th class="text-center">Nilai Terendah</th>
-                        <th class="text-center">Skill Gap</th>
-                        <th>Skill yang Perlu Training</th>
-                        <th class="text-center">Detail</th>
+
+                        <th>
+                            Pekerja
+                        </th>
+
+                        <th class="text-center">
+                            Nilai Terendah
+                        </th>
+
+                        <th class="text-center">
+                            Skill Gap
+                        </th>
+
+                        <th>
+                            Skill yang Perlu Training
+                        </th>
+
+                        <th class="text-center">
+                            Detail
+                        </th>
+
                     </tr>
+
                 </thead>
+
 
                 <tbody>
 
-                <?php foreach ($training_people as $tp): ?>
+                <?php foreach (
+                    $training_people
+                    as $tp
+                ): ?>
+
                     <tr>
 
+                        <!-- =================================
+                             PEKERJA + KETERANGAN
+                        ================================== -->
+
                         <td>
+
                             <a
                                 href="<?= $base ?>pekerja/detail.php?id=<?= (int)$tp['id'] ?>"
                                 class="low-score-worker"
                                 title="<?= e($tp['nama']) ?>"
                             >
-                                <?= e($tp['nama']) ?>
+
+                                <?= e(
+                                    $tp['nama']
+                                ) ?>
+
                             </a>
 
-                            <div class="low-score-meta">
-                                <?php if (!empty($tp['no_reg'])): ?>
-                                    No. Reg: <?= e($tp['no_reg']) ?>
+
+                            <!--
+                                FORMAT:
+
+                                No. Reg: 12345
+                                • Departemen: Teknik PSPD, PDP, PGMJ
+                                • Crew B
+                            -->
+
+                            <div
+                                class="low-score-meta"
+                            >
+
+                                <?php
+                                $metaParts = [];
+                                ?>
+
+
+                                <?php if (
+                                    !empty($tp['no_reg'])
+                                ): ?>
+
+                                    <?php
+                                    $metaParts[] =
+                                        'No. Reg: ' .
+                                        e($tp['no_reg']);
+                                    ?>
+
                                 <?php endif; ?>
 
-                                <?php if (!empty($tp['departemen'])): ?>
-                                    <?php if (!empty($tp['no_reg'])): ?>
-                                        <span class="mx-1">•</span>
-                                    <?php endif; ?>
-                                    <?= e($tp['departemen']) ?>
+
+                                <?php if (
+                                    !empty($tp['departemen'])
+                                ): ?>
+
+                                    <?php
+                                    $metaParts[] =
+                                        'Departemen: ' .
+                                        e($tp['departemen']);
+                                    ?>
+
                                 <?php endif; ?>
+
+
+                                <?php if (
+                                    !empty($tp['keterangan'])
+                                ): ?>
+
+                                    <?php
+                                    $metaParts[] =
+                                        e($tp['keterangan']);
+                                    ?>
+
+                                <?php endif; ?>
+
+
+                                <?= implode(
+                                    ' <span class="mx-1">•</span> ',
+                                    $metaParts
+                                ) ?>
+
                             </div>
+
                         </td>
 
-                        <td class="text-center">
-                            <span class="low-score-value">
-                                <?= number_format((float)$tp['nilai_min'], 2, ',', '.') ?>
-                            </span>
-                        </td>
+
+                        <!-- =================================
+                             NILAI TERENDAH
+                        ================================== -->
 
                         <td class="text-center">
-                            <span class="low-score-gap">
-                                <?= number_format((int)$tp['jumlah_gap']) ?> skill
+
+                            <span
+                                class="low-score-value"
+                            >
+
+                                <?= number_format(
+                                    (float)$tp['nilai_min'],
+                                    2,
+                                    ',',
+                                    '.'
+                                ) ?>
+
                             </span>
+
                         </td>
+
+
+                        <!-- =================================
+                             JUMLAH GAP
+                        ================================== -->
+
+                        <td class="text-center">
+
+                            <span
+                                class="low-score-gap"
+                            >
+
+                                <?= number_format(
+                                    (int)$tp['jumlah_gap']
+                                ) ?>
+
+                                skill
+
+                            </span>
+
+                        </td>
+
+
+                        <!-- =================================
+                             SKILL GAP
+                        ================================== -->
 
                         <td>
-                            <div class="low-score-skills" title="<?= e($tp['skill_gap'] ?? '') ?>">
-                                <?= e($tp['skill_gap'] ?? '-') ?>
+
+                            <div
+                                class="low-score-skills"
+                                title="<?= e(
+                                    $tp['skill_gap'] ?? ''
+                                ) ?>"
+                            >
+
+                                <?= e(
+                                    $tp['skill_gap'] ?? '-'
+                                ) ?>
+
                             </div>
+
                         </td>
 
+
+                        <!-- =================================
+                             DETAIL
+                        ================================== -->
+
                         <td class="text-center">
+
                             <a
                                 href="<?= $base ?>pekerja/detail.php?id=<?= (int)$tp['id'] ?>"
-                                class="btn btn-sm btn-light border"
+                                class="
+                                    btn
+                                    btn-sm
+                                    btn-light
+                                    border
+                                "
                                 title="Detail Pekerja"
                             >
-                                <i class="bi bi-eye"></i>
+
+                                <i
+                                    class="bi bi-eye"
+                                ></i>
+
                             </a>
+
                         </td>
 
                     </tr>
+
                 <?php endforeach; ?>
 
                 </tbody>
+
             </table>
+
         </div>
 
-        <?php if ($training_workers > count($training_people)): ?>
-            <div class="text-center border-top pt-2 mt-1">
+
+        <?php if (
+            $training_workers >
+            count($training_people)
+        ): ?>
+
+            <div
+                class="
+                    text-center
+                    border-top
+                    pt-2
+                    mt-1
+                "
+            >
+
                 <a
                     href="<?= $base ?>training/kebutuhan.php"
-                    class="text-decoration-none small fw-semibold"
-                    style="color:#123f7a;"
+                    class="
+                        text-decoration-none
+                        small
+                        fw-semibold
+                    "
+                    style="
+                        color:#123f7a;
+                    "
                 >
-                    Lihat <?= number_format($training_workers) ?> pekerja yang membutuhkan training
-                    <i class="bi bi-arrow-right ms-1"></i>
+
+                    Lihat
+                    <?= number_format(
+                        $training_workers
+                    ) ?>
+
+                    pekerja yang membutuhkan training
+
+                    <i
+                        class="
+                            bi
+                            bi-arrow-right
+                            ms-1
+                        "
+                    ></i>
+
                 </a>
+
             </div>
+
         <?php endif; ?>
+
 
     <?php else: ?>
 
+
         <div class="low-score-empty">
-            <i class="bi bi-check-circle-fill"></i>
-            Tidak ada pekerja dengan nilai ≤ 2,5 pada assessment terbaru.
+
+            <i
+                class="
+                    bi
+                    bi-check-circle-fill
+                "
+            ></i>
+
+            Tidak ada pekerja dengan nilai ≤ 2,5
+            pada assessment terbaru.
+
         </div>
 
     <?php endif; ?>
@@ -1881,7 +2631,8 @@ body {
 
                     <div class="section-note">
 
-                        Perkembangan hasil assessment berdasarkan tahun.
+                        Perkembangan hasil assessment
+                        berdasarkan tahun.
 
                     </div>
 
@@ -1898,7 +2649,13 @@ body {
                     "
                 >
 
-                    <i class="bi bi-graph-up me-1"></i>
+                    <i
+                        class="
+                            bi
+                            bi-graph-up
+                            me-1
+                        "
+                    ></i>
 
                     Detail
 
@@ -1992,12 +2749,23 @@ body {
 
                 <a
                     href="<?= $base ?>penilaian/perkembangan.php"
-                    class="btn btn-light btn-sm border"
+                    class="
+                        btn
+                        btn-light
+                        btn-sm
+                        border
+                    "
                 >
 
                     Semua
 
-                    <i class="bi bi-arrow-right ms-1"></i>
+                    <i
+                        class="
+                            bi
+                            bi-arrow-right
+                            ms-1
+                        "
+                    ></i>
 
                 </a>
 
@@ -2015,9 +2783,13 @@ body {
                     "
                 >
 
-                    <i class="bi bi-arrow-up"></i>
+                    <i
+                        class="bi bi-arrow-up"
+                    ></i>
 
-                    <?= number_format($total_meningkat) ?>
+                    <?= number_format(
+                        $total_meningkat
+                    ) ?>
 
                     Meningkat
 
@@ -2031,9 +2803,13 @@ body {
                     "
                 >
 
-                    <i class="bi bi-arrow-down"></i>
+                    <i
+                        class="bi bi-arrow-down"
+                    ></i>
 
-                    <?= number_format($total_menurun) ?>
+                    <?= number_format(
+                        $total_menurun
+                    ) ?>
 
                     Menurun
 
@@ -2047,9 +2823,13 @@ body {
                     "
                 >
 
-                    <i class="bi bi-dash"></i>
+                    <i
+                        class="bi bi-dash"
+                    ></i>
 
-                    <?= number_format($total_tetap) ?>
+                    <?= number_format(
+                        $total_tetap
+                    ) ?>
 
                     Tetap
 
@@ -2059,7 +2839,10 @@ body {
 
 
             <div
-                class="table-responsive mt-2"
+                class="
+                    table-responsive
+                    mt-2
+                "
             >
 
                 <table
@@ -2100,7 +2883,11 @@ body {
 
                     <tbody>
 
-                    <?php if (!empty($development_preview)): ?>
+                    <?php if (
+                        !empty(
+                            $development_preview
+                        )
+                    ): ?>
 
 
                         <?php foreach (
@@ -2122,14 +2909,21 @@ body {
                             $delta =
                                 $r['delta'];
 
-                            if ($delta !== null) {
 
-                                if ($delta > 0) {
+                            if (
+                                $delta !== null
+                            ) {
+
+                                if (
+                                    $delta > 0
+                                ) {
 
                                     $changeClass =
                                         'change-up';
 
-                                } elseif ($delta < 0) {
+                                } elseif (
+                                    $delta < 0
+                                ) {
 
                                     $changeClass =
                                         'change-down';
@@ -2162,7 +2956,9 @@ body {
                                         title="<?= e($r['nama']) ?>"
                                     >
 
-                                        <?= e($r['nama']) ?>
+                                        <?= e(
+                                            $r['nama']
+                                        ) ?>
 
                                     </a>
 
@@ -2173,7 +2969,9 @@ body {
 
                                 <td class="text-center">
 
-                                    <?php if ($has25): ?>
+                                    <?php if (
+                                        $has25
+                                    ): ?>
 
                                         <strong>
 
@@ -2186,7 +2984,9 @@ body {
 
                                     <?php else: ?>
 
-                                        <span class="text-muted">
+                                        <span
+                                            class="text-muted"
+                                        >
                                             -
                                         </span>
 
@@ -2199,7 +2999,9 @@ body {
 
                                 <td class="text-center">
 
-                                    <?php if ($has26): ?>
+                                    <?php if (
+                                        $has26
+                                    ): ?>
 
                                         <strong>
 
@@ -2212,7 +3014,9 @@ body {
 
                                     <?php else: ?>
 
-                                        <span class="text-muted">
+                                        <span
+                                            class="text-muted"
+                                        >
                                             -
                                         </span>
 
@@ -2230,9 +3034,13 @@ body {
                                     "
                                 >
 
-                                    <?php if ($delta !== null): ?>
+                                    <?php if (
+                                        $delta !== null
+                                    ): ?>
 
-                                        <?= $delta >= 0 ? '+' : '' ?>
+                                        <?= $delta >= 0
+                                            ? '+'
+                                            : '' ?>
 
                                         <?= number_format(
                                             $delta,
@@ -2287,7 +3095,9 @@ body {
                             >
 
                                 <div
-                                    class="development-empty"
+                                    class="
+                                        development-empty
+                                    "
                                 >
 
                                     <i
@@ -2391,7 +3201,12 @@ body {
 
                 <div>
 
-                    <div class="card-title mb-1">
+                    <div
+                        class="
+                            card-title
+                            mb-1
+                        "
+                    >
 
                         Alur Sistem Skill Monitoring
 
@@ -2410,12 +3225,22 @@ body {
 
                 <a
                     href="<?= $base ?>penilaian/matrix.php"
-                    class="btn btn-primary btn-sm"
+                    class="
+                        btn
+                        btn-primary
+                        btn-sm
+                    "
                 >
 
                     Buka Skill Matrix
 
-                    <i class="bi bi-arrow-right ms-1"></i>
+                    <i
+                        class="
+                            bi
+                            bi-arrow-right
+                            ms-1
+                        "
+                    ></i>
 
                 </a>
 
@@ -2440,7 +3265,12 @@ body {
 
                 <div class="flow-arrow">
 
-                    <i class="bi bi-chevron-right"></i>
+                    <i
+                        class="
+                            bi
+                            bi-chevron-right
+                        "
+                    ></i>
 
                 </div>
 
@@ -2460,7 +3290,12 @@ body {
 
                 <div class="flow-arrow">
 
-                    <i class="bi bi-chevron-right"></i>
+                    <i
+                        class="
+                            bi
+                            bi-chevron-right
+                        "
+                    ></i>
 
                 </div>
 
@@ -2480,7 +3315,12 @@ body {
 
                 <div class="flow-arrow">
 
-                    <i class="bi bi-chevron-right"></i>
+                    <i
+                        class="
+                            bi
+                            bi-chevron-right
+                        "
+                    ></i>
 
                 </div>
 
@@ -2500,7 +3340,12 @@ body {
 
                 <div class="flow-arrow">
 
-                    <i class="bi bi-chevron-right"></i>
+                    <i
+                        class="
+                            bi
+                            bi-chevron-right
+                        "
+                    ></i>
 
                 </div>
 
@@ -2566,12 +3411,14 @@ document.addEventListener(
             canvas,
             {
 
-                type: 'line',
+                type:
+                    'line',
 
 
                 data: {
 
-                    labels: labels,
+                    labels:
+                        labels,
 
 
                     datasets: [
