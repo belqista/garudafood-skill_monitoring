@@ -82,123 +82,697 @@ if ($q) {
 
 
 /* =========================================================
-   PEKERJA YANG MEMBUTUHKAN TRAINING
+   FILTER SEMUA PEKERJA
+========================================================= */
+
+$filter_nilai =
+    trim(
+        $_GET['filter_nilai'] ?? ''
+    );
+
+$filter_kompetensi =
+    trim(
+        $_GET['filter_kompetensi'] ?? ''
+    );
+
+$filter_skill =
+    trim(
+        $_GET['filter_skill'] ?? ''
+    );
+
+$filter_departemen =
+    trim(
+        $_GET['filter_departemen'] ?? ''
+    );
+
+$filter_keterangan =
+    trim(
+        $_GET['filter_keterangan'] ?? ''
+    );
+
+
+/* =========================================================
+   VALIDASI FILTER NILAI
+========================================================= */
+
+$allowed_filter_nilai = [
+
+    ''      => 'Semua Nilai',
+    '1'     => '≤ 1',
+    '1.5'   => '≤ 1,5',
+    '2'     => '≤ 2',
+    '2.5'   => '≤ 2,5',
+    '3'     => '≤ 3',
+    '4'     => '≤ 4',
+    '5'     => '≤ 5'
+
+];
+
+
+if (
+    !array_key_exists(
+        $filter_nilai,
+        $allowed_filter_nilai
+    )
+) {
+
+    $filter_nilai = '';
+
+}
+
+
+/* =========================================================
+   VALIDASI FILTER KOMPETENSI
+========================================================= */
+
+$allowed_filter_kompetensi = [
+
+    '' =>
+        'Semua Kompetensi',
+
+    'level_1' =>
+        'Level 1',
+
+    'level_2' =>
+        'Level 2',
+
+    'level_3' =>
+        'Level 3',
+
+    'level_4' =>
+        'Level 4',
+
+    'level_5' =>
+        'Level 5'
+
+];
+
+
+if (
+    !array_key_exists(
+        $filter_kompetensi,
+        $allowed_filter_kompetensi
+    )
+) {
+
+    $filter_kompetensi = '';
+
+}
+
+
+/* =========================================================
+   DATA UNTUK DROPDOWN FILTER
+========================================================= */
+
+
+/* ---------------------------------------------------------
+   SKILL
+--------------------------------------------------------- */
+
+$filter_skills = [];
+
+$qFilterSkills = $conn->query("
+    SELECT
+        nama_skill
+    FROM skill
+    WHERE
+        status = 'Aktif'
+    ORDER BY
+        nama_skill ASC
+");
+
+if ($qFilterSkills) {
+
+    while (
+        $fr =
+            $qFilterSkills->fetch_assoc()
+    ) {
+
+        $filter_skills[] =
+            $fr['nama_skill'];
+
+    }
+
+}
+
+
+/* ---------------------------------------------------------
+   DEPARTEMEN
+--------------------------------------------------------- */
+
+$filter_departments = [];
+
+$qFilterDepartments = $conn->query("
+    SELECT DISTINCT
+        departemen
+    FROM pekerja
+    WHERE
+        status = 'Aktif'
+        AND departemen IS NOT NULL
+        AND TRIM(departemen) <> ''
+    ORDER BY
+        departemen ASC
+");
+
+if ($qFilterDepartments) {
+
+    while (
+        $fr =
+            $qFilterDepartments->fetch_assoc()
+    ) {
+
+        $filter_departments[] =
+            $fr['departemen'];
+
+    }
+
+}
+
+
+/* ---------------------------------------------------------
+   KETERANGAN PEKERJA
+--------------------------------------------------------- */
+
+$filter_keterangan_list = [];
+
+$qFilterKeterangan = $conn->query("
+    SELECT DISTINCT
+        keterangan
+    FROM pekerja
+    WHERE
+        status = 'Aktif'
+        AND keterangan IS NOT NULL
+        AND TRIM(keterangan) <> ''
+    ORDER BY
+        keterangan ASC
+");
+
+if ($qFilterKeterangan) {
+
+    while (
+        $fr =
+            $qFilterKeterangan->fetch_assoc()
+    ) {
+
+        $filter_keterangan_list[] =
+            $fr['keterangan'];
+
+    }
+
+}
+
+
+/* =========================================================
+   DATA SEMUA PEKERJA + RATA-RATA NILAI SKILL
 
    LOGIKA:
-   - Pekerja aktif
-   - Skill aktif
-   - Assessment tahun terbaru
-   - Ada minimal satu nilai <= 2.5
+   - Semua pekerja aktif tetap ditampilkan
+   - Assessment yang digunakan adalah tahun terbaru
+   - Rata-rata dihitung PER PEKERJA
+   - Rata-rata berasal dari seluruh skill aktif yang dinilai
+   - Pekerja tanpa assessment tetap muncul
+   - Filter diterapkan setelah rata-rata worker dihitung
 ========================================================= */
 
 $training_workers = 0;
+
 $training_people = [];
 
-if ($latest_year !== null) {
+$filtered_worker_count = 0;
 
-    $latestYearSafe = (int)$latest_year;
+
+if (
+    $latest_year !== null
+) {
+
+    $latestYearSafe =
+        (int)$latest_year;
 
 
     /* =====================================================
-       JUMLAH PEKERJA DENGAN NILAI <= 2.5
+       JUMLAH PEKERJA YANG RATA-RATANYA <= 2.5
+       TETAP BERDASARKAN LOGIKA DASHBOARD
     ====================================================== */
 
     $q = $conn->query("
-        SELECT COUNT(*) AS n
+        SELECT
+            COUNT(*) AS n
+
         FROM (
-            SELECT p.id
+
+            SELECT
+                p.id,
+
+                AVG(
+                    CASE
+                        WHEN s.id IS NOT NULL
+                             AND ps.nilai IS NOT NULL
+                        THEN ps.nilai
+                    END
+                ) AS rata_skill
 
             FROM pekerja p
 
-            INNER JOIN penilaian_skill ps
+            LEFT JOIN penilaian_skill ps
                 ON ps.id_pekerja = p.id
+                AND ps.tahun = {$latestYearSafe}
+                AND ps.nilai IS NOT NULL
 
-            INNER JOIN skill s
+            LEFT JOIN skill s
                 ON s.id = ps.id_skill
+                AND s.status = 'Aktif'
 
             WHERE
                 p.status = 'Aktif'
-                AND s.status = 'Aktif'
-                AND ps.tahun = {$latestYearSafe}
-                AND ps.nilai IS NOT NULL
-                AND ps.nilai <= 2.5
 
-            GROUP BY p.id
+            GROUP BY
+                p.id
+
+            HAVING
+                AVG(
+                    CASE
+                        WHEN s.id IS NOT NULL
+                             AND ps.nilai IS NOT NULL
+                        THEN ps.nilai
+                    END
+                ) <= 2.5
+
         ) x
     ");
 
+
     if ($q) {
-        $training_workers = (int)(
-            $q->fetch_assoc()['n'] ?? 0
-        );
+
+        $training_workers =
+            (int)(
+                $q->fetch_assoc()['n']
+                ?? 0
+            );
+
     }
 
 
     /* =====================================================
-       DAFTAR PEKERJA NILAI <= 2.5
+       KONDISI FILTER EKSTERNAL
 
-       Keterangan ditambahkan dari:
-       p.keterangan
+       Filter skill / kompetensi menggunakan EXISTS.
 
-       Contoh:
-       Budi Santoso
-       No. Reg: 12345 • Departemen: Teknik PSPD, PDP, PGMJ • Crew B
+       Tujuannya:
+       pekerja harus memiliki skill yang sesuai filter,
+       tetapi rata-rata tetap dihitung dari SEMUA skill pekerja.
     ====================================================== */
+
+    $extraWhere = [];
+
+
+    /* -----------------------------------------------------
+       SKILL
+    ----------------------------------------------------- */
+
+    if (
+        $filter_skill !== ''
+    ) {
+
+        $safeSkill =
+            $conn->real_escape_string(
+                $filter_skill
+            );
+
+
+        $extraWhere[] = "
+
+            EXISTS (
+
+                SELECT 1
+
+                FROM penilaian_skill fps
+
+                INNER JOIN skill fs
+                    ON fs.id = fps.id_skill
+                    AND fs.status = 'Aktif'
+
+                WHERE
+                    fps.id_pekerja = p.id
+                    AND fps.tahun = {$latestYearSafe}
+                    AND fps.nilai IS NOT NULL
+                    AND fs.nama_skill = '{$safeSkill}'
+
+            )
+
+        ";
+
+    }
+
+
+    /* -----------------------------------------------------
+       KOMPETENSI
+    ----------------------------------------------------- */
+
+    if (
+        $filter_kompetensi !== ''
+    ) {
+
+        $safeLevel =
+            preg_replace(
+                '/[^a-zA-Z0-9_]/',
+                '',
+                $filter_kompetensi
+            );
+
+
+        if (
+            in_array(
+                $safeLevel,
+                [
+                    'level_1',
+                    'level_2',
+                    'level_3',
+                    'level_4',
+                    'level_5'
+                ],
+                true
+            )
+        ) {
+
+            $extraWhere[] = "
+
+                EXISTS (
+
+                    SELECT 1
+
+                    FROM skill fs
+
+                    INNER JOIN penilaian_skill fps
+                        ON fps.id_skill = fs.id
+
+                    WHERE
+                        fps.id_pekerja = p.id
+                        AND fps.tahun = {$latestYearSafe}
+                        AND fps.nilai IS NOT NULL
+                        AND fs.status = 'Aktif'
+                        AND fs.{$safeLevel} IS NOT NULL
+                        AND TRIM(fs.{$safeLevel}) <> ''
+
+                )
+
+            ";
+
+        }
+
+    }
+
+
+    /* -----------------------------------------------------
+       DEPARTEMEN
+    ----------------------------------------------------- */
+
+    if (
+        $filter_departemen !== ''
+    ) {
+
+        $safeDepartemen =
+            $conn->real_escape_string(
+                $filter_departemen
+            );
+
+
+        $extraWhere[] =
+            "p.departemen = '{$safeDepartemen}'";
+
+    }
+
+
+    /* -----------------------------------------------------
+       KETERANGAN
+    ----------------------------------------------------- */
+
+    if (
+        $filter_keterangan !== ''
+    ) {
+
+        $safeKeterangan =
+            $conn->real_escape_string(
+                $filter_keterangan
+            );
+
+
+        $extraWhere[] =
+            "p.keterangan = '{$safeKeterangan}'";
+
+    }
+
+
+    $extraWhereSql = '';
+
+
+    if (
+        !empty($extraWhere)
+    ) {
+
+        $extraWhereSql =
+            ' AND ' .
+            implode(
+                ' AND ',
+                $extraWhere
+            );
+
+    }
+
+
+    /* =====================================================
+       QUERY SEMUA PEKERJA
+
+       CATATAN:
+       Filter Nilai menggunakan HAVING agar nilai yang
+       dibandingkan adalah RATA-RATA SELURUH SKILL.
+    ====================================================== */
+
+    $havingFilter = '';
+
+
+    if (
+        $filter_nilai !== ''
+    ) {
+
+        $nilaiFilterSafe =
+            (float)$filter_nilai;
+
+
+        $havingFilter = "
+
+            HAVING
+
+                AVG(
+                    CASE
+                        WHEN s.id IS NOT NULL
+                             AND ps.nilai IS NOT NULL
+                        THEN ps.nilai
+                    END
+                )
+                <= {$nilaiFilterSafe}
+
+        ";
+
+    }
+
 
     $qTrainingPeople = $conn->query("
         SELECT
+
             p.id,
+
             p.no_reg,
+
             p.nama,
+
             p.departemen,
+
             p.keterangan,
 
-            ROUND(
-                MIN(ps.nilai),
-                2
-            ) AS nilai_min,
 
-            COUNT(ps.id) AS jumlah_gap,
+            /* =========================================
+               RATA-RATA SEMUA SKILL PEKERJA
+            ========================================== */
+
+            ROUND(
+
+                AVG(
+
+                    CASE
+
+                        WHEN
+                            s.id IS NOT NULL
+                            AND ps.nilai IS NOT NULL
+
+                        THEN ps.nilai
+
+                    END
+
+                ),
+
+                2
+
+            ) AS rata_skill,
+
+
+            /* =========================================
+               JUMLAH SKILL YANG DINILAI
+            ========================================== */
+
+            COUNT(
+
+                DISTINCT
+
+                CASE
+
+                    WHEN
+                        s.id IS NOT NULL
+                        AND ps.nilai IS NOT NULL
+
+                    THEN s.id
+
+                END
+
+            ) AS jumlah_skill,
+
+
+            /* =========================================
+               JUMLAH SKILL GAP
+               Batas training tetap 2.5
+            ========================================== */
+
+            SUM(
+
+                CASE
+
+                    WHEN
+                        s.id IS NOT NULL
+                        AND ps.nilai IS NOT NULL
+                        AND ps.nilai <= 2.5
+
+                    THEN 1
+
+                    ELSE 0
+
+                END
+
+            ) AS jumlah_gap,
+
+
+            /* =========================================
+               DAFTAR SKILL YANG <= 2.5
+            ========================================== */
 
             GROUP_CONCAT(
-                DISTINCT s.nama_skill
+
+                DISTINCT
+
+                CASE
+
+                    WHEN
+                        s.id IS NOT NULL
+                        AND ps.nilai IS NOT NULL
+                        AND ps.nilai <= 2.5
+
+                    THEN s.nama_skill
+
+                END
+
                 ORDER BY
                     ps.nilai ASC,
                     s.nama_skill ASC
+
                 SEPARATOR ', '
+
             ) AS skill_gap
+
 
         FROM pekerja p
 
-        INNER JOIN penilaian_skill ps
+
+        /* =============================================
+           SEMUA NILAI SKILL TAHUN TERBARU
+        ============================================== */
+
+        LEFT JOIN penilaian_skill ps
+
             ON ps.id_pekerja = p.id
 
-        INNER JOIN skill s
+            AND ps.tahun = {$latestYearSafe}
+
+            AND ps.nilai IS NOT NULL
+
+
+        /* =============================================
+           HANYA SKILL AKTIF
+        ============================================== */
+
+        LEFT JOIN skill s
+
             ON s.id = ps.id_skill
 
-        WHERE
-            p.status = 'Aktif'
             AND s.status = 'Aktif'
-            AND ps.tahun = {$latestYearSafe}
-            AND ps.nilai IS NOT NULL
-            AND ps.nilai <= 2.5
+
+
+        WHERE
+
+            p.status = 'Aktif'
+
+            {$extraWhereSql}
+
 
         GROUP BY
+
             p.id,
+
             p.no_reg,
+
             p.nama,
+
             p.departemen,
+
             p.keterangan
 
+
+        {$havingFilter}
+
+
         ORDER BY
-            nilai_min ASC,
-            jumlah_gap DESC,
+
+            CASE
+
+                WHEN AVG(
+
+                    CASE
+
+                        WHEN
+                            s.id IS NOT NULL
+                            AND ps.nilai IS NOT NULL
+
+                        THEN ps.nilai
+
+                    END
+
+                ) IS NULL
+
+                THEN 1
+
+                ELSE 0
+
+            END ASC,
+
+
+            rata_skill ASC,
+
+
             p.nama ASC
 
-        LIMIT 8
     ");
 
-    if ($qTrainingPeople) {
+
+    if (
+        $qTrainingPeople
+    ) {
 
         while (
             $trainingRow =
@@ -207,37 +781,91 @@ if ($latest_year !== null) {
 
             $training_people[] =
                 $trainingRow;
+
         }
+
     }
+
+
+    $filtered_worker_count =
+        count(
+            $training_people
+        );
+
 }
 
 
 /* =========================================================
-   RATA-RATA SEMUA SKILL TERBARU
+   RATA-RATA SEMUA PEKERJA PADA ASSESSMENT TERBARU
+
+   Setiap pekerja memiliki bobot yang sama.
 ========================================================= */
 
 $avg = 0;
 
-if ($latest_year !== null) {
+if (
+    $latest_year !== null
+) {
 
-    $latestYearSafe = (int)$latest_year;
+    $latestYearSafe =
+        (int)$latest_year;
+
 
     $q = $conn->query("
         SELECT
-            ROUND(AVG(nilai), 2) AS a
+            ROUND(
+                AVG(worker_avg),
+                2
+            ) AS a
 
-        FROM penilaian_skill
+        FROM (
 
-        WHERE
-            tahun = {$latestYearSafe}
+            SELECT
+
+                p.id,
+
+                AVG(
+                    ps.nilai
+                ) AS worker_avg
+
+            FROM pekerja p
+
+            INNER JOIN penilaian_skill ps
+
+                ON ps.id_pekerja = p.id
+
+                AND ps.tahun = {$latestYearSafe}
+
+                AND ps.nilai IS NOT NULL
+
+            INNER JOIN skill s
+
+                ON s.id = ps.id_skill
+
+                AND s.status = 'Aktif'
+
+            WHERE
+
+                p.status = 'Aktif'
+
+            GROUP BY
+
+                p.id
+
+        ) workers_avg
     ");
+
 
     if ($q) {
 
-        $avg = (float)(
-            $q->fetch_assoc()['a'] ?? 0
-        );
+        $avg =
+            (float)(
+                $q->fetch_assoc()['a']
+                ?? 0
+            );
+
     }
+
 }
 
 
@@ -250,47 +878,82 @@ $development_people = null;
 
 $development_sql = "
     SELECT
+
         p.id,
+
         p.nama,
 
-        ROUND(
-            AVG(
-                CASE
-                    WHEN ps.tahun = 2025
-                    THEN ps.nilai
-                END
-            ),
-            2
-        ) AS y25,
 
         ROUND(
+
             AVG(
+
                 CASE
-                    WHEN ps.tahun = 2026
+
+                    WHEN
+                        ps.tahun = 2025
+
                     THEN ps.nilai
+
                 END
+
             ),
+
             2
+
+        ) AS y25,
+
+
+        ROUND(
+
+            AVG(
+
+                CASE
+
+                    WHEN
+                        ps.tahun = 2026
+
+                    THEN ps.nilai
+
+                END
+
+            ),
+
+            2
+
         ) AS y26
+
 
     FROM pekerja p
 
+
     LEFT JOIN penilaian_skill ps
+
         ON ps.id_pekerja = p.id
 
+
     WHERE
+
         p.status = 'Aktif'
 
+
     GROUP BY
+
         p.id,
+
         p.nama
 
+
     ORDER BY
+
         p.nama ASC
 ";
 
+
 $development_people =
-    $conn->query($development_sql);
+    $conn->query(
+        $development_sql
+    );
 
 
 /* =========================================================
@@ -299,8 +962,13 @@ $development_people =
 
 $chart = $conn->query("
     SELECT
+
         tahun,
-        ROUND(AVG(nilai), 2) AS avg_nilai
+
+        ROUND(
+            AVG(nilai),
+            2
+        ) AS avg_nilai
 
     FROM penilaian_skill
 
@@ -311,19 +979,27 @@ $chart = $conn->query("
         tahun ASC
 ");
 
+
 $labels = [];
-$vals   = [];
+
+$vals = [];
+
 
 if ($chart) {
 
-    while ($r = $chart->fetch_assoc()) {
+    while (
+        $r =
+        $chart->fetch_assoc()
+    ) {
 
         $labels[] =
             $r['tahun'];
 
         $vals[] =
             (float)$r['avg_nilai'];
+
     }
+
 }
 
 
@@ -332,26 +1008,39 @@ if ($chart) {
 ========================================================= */
 
 $total_meningkat = 0;
-$total_menurun   = 0;
-$total_tetap     = 0;
-$total_belum     = 0;
+
+$total_menurun = 0;
+
+$total_tetap = 0;
+
+$total_belum = 0;
 
 $development_data = [];
 
-if ($development_people) {
 
-    while ($r = $development_people->fetch_assoc()) {
+if (
+    $development_people
+) {
+
+    while (
+        $r =
+        $development_people->fetch_assoc()
+    ) {
 
         $has25 =
             $r['y25'] !== null &&
             $r['y25'] !== '';
+
 
         $has26 =
             $r['y26'] !== null &&
             $r['y26'] !== '';
 
 
-        if ($has25 && $has26) {
+        if (
+            $has25 &&
+            $has26
+        ) {
 
             $delta =
                 (float)$r['y26']
@@ -360,11 +1049,15 @@ if ($development_people) {
 
         } else {
 
-            $delta = null;
+            $delta =
+                null;
+
         }
 
 
-        if ($delta === null) {
+        if (
+            $delta === null
+        ) {
 
             $statusClass =
                 'status-mid';
@@ -374,7 +1067,9 @@ if ($development_people) {
 
             $total_belum++;
 
-        } elseif ($delta > 0) {
+        } elseif (
+            $delta > 0
+        ) {
 
             $statusClass =
                 'status-good';
@@ -384,7 +1079,9 @@ if ($development_people) {
 
             $total_meningkat++;
 
-        } elseif ($delta < 0) {
+        } elseif (
+            $delta < 0
+        ) {
 
             $statusClass =
                 'status-bad';
@@ -403,26 +1100,32 @@ if ($development_people) {
                 'Tetap';
 
             $total_tetap++;
+
         }
 
 
         $r['delta'] =
             $delta;
 
+
         $r['statusClass'] =
             $statusClass;
+
 
         $r['statusText'] =
             $statusText;
 
+
         $development_data[] =
             $r;
+
     }
+
 }
 
 
 /* =========================================================
-   BATASI DATA YANG DITAMPILKAN
+   BATASI DATA PERKEMBANGAN
 ========================================================= */
 
 $development_preview =
@@ -438,9 +1141,54 @@ $development_preview =
 ========================================================= */
 
 $total_development =
-    count($development_data);
+    count(
+        $development_data
+    );
+
+
+/* =========================================================
+   JUMLAH FILTER AKTIF
+========================================================= */
+
+$filter_active_count = 0;
+
+
+if (
+    $filter_nilai !== ''
+) {
+    $filter_active_count++;
+}
+
+
+if (
+    $filter_kompetensi !== ''
+) {
+    $filter_active_count++;
+}
+
+
+if (
+    $filter_skill !== ''
+) {
+    $filter_active_count++;
+}
+
+
+if (
+    $filter_departemen !== ''
+) {
+    $filter_active_count++;
+}
+
+
+if (
+    $filter_keterangan !== ''
+) {
+    $filter_active_count++;
+}
 
 ?>
+
 
 <style>
 
@@ -451,24 +1199,33 @@ $total_development =
 :root {
 
     --gf-blue-dark: #092f63;
+
     --gf-blue: #123f7a;
+
     --gf-blue-light: #eaf2ff;
+
     --gf-blue-hover: #082952;
 
     --gf-text: #172033;
+
     --gf-muted: #788396;
 
     --gf-border: #e7ebf1;
+
     --gf-bg: #f5f7fb;
 
     --gf-green: #198754;
+
     --gf-green-bg: #e9f8f0;
 
     --gf-red: #dc3545;
+
     --gf-red-bg: #ffecee;
 
     --gf-orange: #b77900;
+
     --gf-orange-bg: #fff4d8;
+
 }
 
 
@@ -505,17 +1262,13 @@ body {
 
 .dashboard-heading {
 
-    position:
-        relative;
+    position: relative;
 
-    margin-bottom:
-        25px;
+    margin-bottom: 25px;
 
-    padding:
-        25px 28px;
+    padding: 25px 28px;
 
-    border-radius:
-        18px;
+    border-radius: 18px;
 
     background:
         linear-gradient(
@@ -533,164 +1286,122 @@ body {
         0 10px 30px
         rgba(9,47,99,.18);
 
-    overflow:
-        hidden;
+    overflow: hidden;
 }
 
 
 .dashboard-heading::before {
 
-    content:
-        "";
+    content: "";
 
-    position:
-        absolute;
+    position: absolute;
 
-    width:
-        230px;
+    width: 230px;
 
-    height:
-        230px;
+    height: 230px;
 
-    border-radius:
-        50%;
+    border-radius: 50%;
 
-    right:
-        -80px;
+    right: -80px;
 
-    top:
-        -130px;
+    top: -130px;
 
     background:
         rgba(255,255,255,.055);
 
-    pointer-events:
-        none;
+    pointer-events: none;
 }
 
 
 .dashboard-heading::after {
 
-    content:
-        "";
+    content: "";
 
-    position:
-        absolute;
+    position: absolute;
 
-    width:
-        170px;
+    width: 170px;
 
-    height:
-        170px;
+    height: 170px;
 
-    border-radius:
-        50%;
+    border-radius: 50%;
 
-    right:
-        70px;
+    right: 70px;
 
-    bottom:
-        -125px;
+    bottom: -125px;
 
     background:
         rgba(255,255,255,.035);
 
-    pointer-events:
-        none;
+    pointer-events: none;
 }
 
 
 .dashboard-eyebrow {
 
-    position:
-        relative;
+    position: relative;
 
-    z-index:
-        2;
+    z-index: 2;
 
-    display:
-        inline-flex;
+    display: inline-flex;
 
-    align-items:
-        center;
+    align-items: center;
 
-    gap:
-        7px;
+    gap: 7px;
 
-    color:
-        #dceaff;
+    color: #dceaff;
 
-    font-size:
-        12px;
+    font-size: 12px;
 
-    font-weight:
-        700;
+    font-weight: 700;
 
-    text-transform:
-        uppercase;
+    text-transform: uppercase;
 
-    letter-spacing:
-        .08em;
+    letter-spacing: .08em;
 
-    margin-bottom:
-        8px;
+    margin-bottom: 8px;
 }
 
 
 .dashboard-eyebrow i {
 
-    color:
-        #ffffff;
+    color: #ffffff;
 
-    font-size:
-        14px;
+    font-size: 14px;
 }
 
 
 .dashboard-title {
 
-    position:
-        relative;
+    position: relative;
 
-    z-index:
-        2;
+    z-index: 2;
 
-    margin:
-        0;
+    margin: 0;
 
-    font-size:
-        28px;
+    font-size: 28px;
 
-    line-height:
-        1.2;
+    line-height: 1.2;
 
-    font-weight:
-        750;
+    font-weight: 750;
 
-    color:
-        #ffffff;
+    color: #ffffff;
 }
 
 
 .dashboard-description {
 
-    position:
-        relative;
+    position: relative;
 
-    z-index:
-        2;
+    z-index: 2;
 
-    margin-top:
-        8px;
+    margin-top: 8px;
 
     color:
         rgba(255,255,255,.78);
 
-    font-size:
-        13px;
+    font-size: 13px;
 
-    max-width:
-        900px;
+    max-width: 900px;
 }
 
 
@@ -700,24 +1411,19 @@ body {
 
 .stat-card {
 
-    position:
-        relative;
+    position: relative;
 
-    min-height:
-        132px;
+    min-height: 132px;
 
-    padding:
-        22px;
+    padding: 22px;
 
-    background:
-        #ffffff;
+    background: #ffffff;
 
     border:
         1px solid
         var(--gf-border);
 
-    border-radius:
-        17px;
+    border-radius: 17px;
 
     box-shadow:
         0 5px 20px
@@ -746,91 +1452,69 @@ body {
 
 .stat-card-link {
 
-    display:
-        block;
+    display: block;
 
-    color:
-        inherit;
+    color: inherit;
 
-    text-decoration:
-        none;
+    text-decoration: none;
 }
 
 
 .stat-card-link:hover {
 
-    color:
-        inherit;
+    color: inherit;
 
-    text-decoration:
-        none;
+    text-decoration: none;
 }
 
 
 .stat-label {
 
-    color:
-        #7a8494;
+    color: #7a8494;
 
-    font-size:
-        11px;
+    font-size: 11px;
 
-    font-weight:
-        700;
+    font-weight: 700;
 
-    letter-spacing:
-        .06em;
+    letter-spacing: .06em;
 
-    margin-bottom:
-        7px;
+    margin-bottom: 7px;
 }
 
 
 .stat-value {
 
-    color:
-        #172033;
+    color: #172033;
 
-    font-size:
-        28px;
+    font-size: 28px;
 
-    font-weight:
-        750;
+    font-weight: 750;
 
-    line-height:
-        1.1;
+    line-height: 1.1;
 }
 
 
 .stat-value small {
 
-    color:
-        #8b95a4;
+    color: #8b95a4;
 
-    font-weight:
-        500;
+    font-weight: 500;
 }
 
 
 .stat-icon {
 
-    width:
-        46px;
+    width: 46px;
 
-    height:
-        46px;
+    height: 46px;
 
-    display:
-        flex;
+    display: flex;
 
-    align-items:
-        center;
+    align-items: center;
 
-    justify-content:
-        center;
+    justify-content: center;
 
-    border-radius:
-        13px;
+    border-radius: 13px;
 
     background:
         var(--gf-blue-light);
@@ -838,8 +1522,7 @@ body {
     color:
         var(--gf-blue);
 
-    font-size:
-        19px;
+    font-size: 19px;
 }
 
 
@@ -849,18 +1532,15 @@ body {
 
 .cardx {
 
-    background:
-        #ffffff;
+    background: #ffffff;
 
     border:
         1px solid
         var(--gf-border);
 
-    border-radius:
-        17px;
+    border-radius: 17px;
 
-    padding:
-        21px;
+    padding: 21px;
 
     box-shadow:
         0 5px 20px
@@ -870,24 +1550,19 @@ body {
 
 .card-title {
 
-    color:
-        #172033;
+    color: #172033;
 
-    font-size:
-        14px;
+    font-size: 14px;
 
-    font-weight:
-        750;
+    font-weight: 750;
 }
 
 
 .section-note {
 
-    color:
-        #8a94a4;
+    color: #8a94a4;
 
-    font-size:
-        12px;
+    font-size: 12px;
 }
 
 
@@ -908,11 +1583,9 @@ body {
         1px solid
         #f5d6d9;
 
-    border-radius:
-        17px;
+    border-radius: 17px;
 
-    padding:
-        20px;
+    padding: 20px;
 
     box-shadow:
         0 5px 20px
@@ -922,23 +1595,17 @@ body {
 
 .training-alert-icon {
 
-    width:
-        46px;
+    width: 46px;
 
-    height:
-        46px;
+    height: 46px;
 
-    border-radius:
-        13px;
+    border-radius: 13px;
 
-    display:
-        flex;
+    display: flex;
 
-    align-items:
-        center;
+    align-items: center;
 
-    justify-content:
-        center;
+    justify-content: center;
 
     background:
         var(--gf-red-bg);
@@ -946,119 +1613,213 @@ body {
     color:
         var(--gf-red);
 
-    font-size:
-        20px;
+    font-size: 20px;
 }
 
 
 /* =========================================================
-   LOW SCORE / TRAINING WORKERS
+   LOW SCORE / ALL WORKERS
 ========================================================= */
 
 .low-score-card {
 
-    background:
-        #ffffff;
+    background: #ffffff;
 
     border:
         1px solid
-        #f1d6d9;
+        #e1e7ef;
 
-    border-radius:
-        17px;
+    border-radius: 17px;
 
-    padding:
-        21px;
+    padding: 21px;
 
     box-shadow:
         0 5px 20px
-        rgba(150,30,45,.045);
+        rgba(20,43,76,.045);
 }
 
 
 .low-score-header {
 
-    display:
-        flex;
+    display: flex;
 
-    align-items:
-        flex-start;
+    align-items: flex-start;
 
-    justify-content:
-        space-between;
+    justify-content: space-between;
 
-    gap:
-        15px;
+    gap: 15px;
 
-    flex-wrap:
-        wrap;
+    flex-wrap: wrap;
 }
 
 
 .low-score-title {
 
     color:
-        #842029;
+        #123f7a;
 
-    font-size:
-        14px;
+    font-size: 14px;
 
-    font-weight:
-        750;
+    font-weight: 750;
 }
 
 
 .low-score-note {
 
     color:
-        #8a6468;
+        #7d8796;
 
-    font-size:
-        12px;
+    font-size: 12px;
 
-    margin-top:
-        3px;
+    margin-top: 3px;
+
+    max-width: 900px;
 }
 
 
 .low-score-count {
 
-    display:
-        inline-flex;
+    display: inline-flex;
 
-    align-items:
-        center;
+    align-items: center;
 
-    gap:
-        5px;
+    gap: 5px;
 
     padding:
         5px 9px;
 
-    border-radius:
-        7px;
+    border-radius: 7px;
 
     background:
-        #ffecee;
+        #eaf2ff;
 
     color:
-        #dc3545;
+        #123f7a;
 
-    font-size:
-        10px;
+    font-size: 10px;
 
-    font-weight:
-        750;
+    font-weight: 750;
 
-    white-space:
-        nowrap;
+    white-space: nowrap;
 }
 
 
+/* =========================================================
+   FILTER
+========================================================= */
+
+.dashboard-filter {
+
+    margin-top: 16px;
+
+    padding: 15px;
+
+    border:
+        1px solid
+        #dce6f3;
+
+    border-radius: 13px;
+
+    background:
+        #f8faff;
+}
+
+
+.dashboard-filter-title {
+
+    color:
+        #123f7a;
+
+    font-size: 11px;
+
+    font-weight: 750;
+
+    text-transform: uppercase;
+
+    letter-spacing: .05em;
+
+    margin-bottom: 11px;
+}
+
+
+.dashboard-filter .form-label {
+
+    color:
+        #6f7b8c;
+
+    font-size: 9px;
+
+    font-weight: 750;
+
+    text-transform: uppercase;
+
+    letter-spacing: .04em;
+
+    margin-bottom: 4px;
+}
+
+
+.dashboard-filter .form-select {
+
+    min-height: 37px;
+
+    border:
+        1px solid
+        #d9e1eb;
+
+    border-radius: 8px;
+
+    font-size: 11px;
+
+    color:
+        #344054;
+}
+
+
+.dashboard-filter .form-select:focus {
+
+    border-color:
+        #123f7a;
+
+    box-shadow:
+        0 0 0 .15rem
+        rgba(18,63,122,.10);
+}
+
+
+.filter-status {
+
+    margin-top: 9px;
+
+    padding-top: 9px;
+
+    border-top:
+        1px solid
+        #e3eaf3;
+
+    color:
+        #7d8796;
+
+    font-size: 10px;
+}
+
+
+.filter-status strong {
+
+    color:
+        #123f7a;
+}
+
+
+/* =========================================================
+   TABLE
+========================================================= */
+
 .low-score-table {
 
-    width:
-        100%;
+    width: 100%;
+
+    min-width: 1050px;
 
     margin:
         15px 0 0;
@@ -1068,32 +1829,27 @@ body {
 .low-score-table thead th {
 
     background:
-        #fff8f8;
+        #f7f9fc;
 
     color:
-        #8a6468;
+        #7d8796;
 
-    font-size:
-        9px;
+    font-size: 9px;
 
-    font-weight:
-        750;
+    font-weight: 750;
 
-    text-transform:
-        uppercase;
+    text-transform: uppercase;
 
-    letter-spacing:
-        .04em;
+    letter-spacing: .04em;
 
     padding:
-        9px 8px;
+        10px 8px;
 
     border-bottom:
         1px solid
-        #f1dfe1;
+        #dfe5ed;
 
-    white-space:
-        nowrap;
+    white-space: nowrap;
 }
 
 
@@ -1102,32 +1858,29 @@ body {
     color:
         #384457;
 
-    font-size:
-        11px;
+    font-size: 11px;
 
     padding:
         10px 8px;
 
     border-bottom:
         1px solid
-        #f1f3f5;
+        #edf0f4;
 
-    vertical-align:
-        middle;
+    vertical-align: middle;
 }
 
 
 .low-score-table tbody tr:last-child td {
 
-    border-bottom:
-        0;
+    border-bottom: 0;
 }
 
 
 .low-score-table tbody tr:hover {
 
     background:
-        #fffafa;
+        #fafbfd;
 }
 
 
@@ -1136,14 +1889,11 @@ body {
     color:
         #172033;
 
-    font-weight:
-        700;
+    font-weight: 700;
 
-    text-decoration:
-        none;
+    text-decoration: none;
 
-    display:
-        block;
+    display: block;
 }
 
 
@@ -1159,48 +1909,48 @@ body {
     color:
         #8a94a4;
 
-    font-size:
-        9px;
+    font-size: 9px;
 
-    margin-top:
-        3px;
+    margin-top: 2px;
 
-    line-height:
-        1.7;
+    line-height: 1.5;
 }
 
 
 .low-score-value {
 
-    display:
-        inline-flex;
+    display: inline-flex;
 
-    align-items:
-        center;
+    align-items: center;
 
-    justify-content:
-        center;
+    justify-content: center;
 
-    min-width:
-        40px;
+    min-width: 42px;
 
     padding:
         5px 7px;
 
-    border-radius:
-        7px;
+    border-radius: 7px;
+
+    background:
+        #eaf2ff;
+
+    color:
+        #123f7a;
+
+    font-size: 11px;
+
+    font-weight: 800;
+}
+
+
+.low-score-value.is-training {
 
     background:
         #ffecee;
 
     color:
         #dc3545;
-
-    font-size:
-        11px;
-
-    font-weight:
-        800;
 }
 
 
@@ -1209,11 +1959,9 @@ body {
     color:
         #dc3545;
 
-    font-size:
-        10px;
+    font-size: 10px;
 
-    font-weight:
-        700;
+    font-weight: 700;
 }
 
 
@@ -1222,251 +1970,60 @@ body {
     color:
         #66758a;
 
-    font-size:
-        10px;
+    font-size: 10px;
 
-    line-height:
-        1.5;
+    line-height: 1.5;
 
-    max-width:
-        430px;
+    max-width: 430px;
 }
 
 
 .low-score-empty {
 
-    text-align:
-        center;
+    text-align: center;
 
     padding:
-        25px 15px;
+        28px 15px;
 
     color:
-        #198754;
+        #8a94a4;
 
-    font-size:
-        12px;
+    font-size: 12px;
 }
 
 
 .low-score-empty i {
 
-    display:
-        block;
+    display: block;
 
-    font-size:
-        26px;
+    font-size: 26px;
 
-    margin-bottom:
-        6px;
+    margin-bottom: 6px;
 }
 
 
 /* =========================================================
-   CHART
-========================================================= */
-
-.chart-wrapper {
-
-    position:
-        relative;
-
-    width:
-        100%;
-
-    height:
-        280px;
-}
-
-
-/* =========================================================
-   DEVELOPMENT TABLE
-========================================================= */
-
-.development-table {
-
-    margin:
-        0;
-}
-
-
-.development-table thead th {
-
-    border-top:
-        0;
-
-    border-bottom:
-        1px solid
-        #e3e8ef;
-
-    color:
-        #7d8796;
-
-    font-size:
-        9px;
-
-    font-weight:
-        750;
-
-    text-transform:
-        uppercase;
-
-    letter-spacing:
-        .04em;
-
-    padding:
-        10px 7px;
-
-    white-space:
-        nowrap;
-}
-
-
-.development-table tbody td {
-
-    border-bottom:
-        1px solid
-        #edf0f4;
-
-    color:
-        #384457;
-
-    font-size:
-        11px;
-
-    padding:
-        11px 7px;
-
-    vertical-align:
-        middle;
-}
-
-
-.development-table tbody tr:last-child td {
-
-    border-bottom:
-        0;
-}
-
-
-.development-table tbody tr:hover {
-
-    background:
-        #fafbfd;
-}
-
-
-.development-worker {
-
-    color:
-        #16223a;
-
-    font-weight:
-        650;
-
-    text-decoration:
-        none;
-
-    display:
-        block;
-
-    max-width:
-        130px;
-
-    white-space:
-        nowrap;
-
-    overflow:
-        hidden;
-
-    text-overflow:
-        ellipsis;
-}
-
-
-.development-worker:hover {
-
-    color:
-        var(--gf-blue);
-
-    text-decoration:
-        underline;
-}
-
-
-/* =========================================================
-   CHANGE
-========================================================= */
-
-.change-up {
-
-    color:
-        #198754;
-
-    font-weight:
-        800;
-}
-
-
-.change-down {
-
-    color:
-        #dc3545;
-
-    font-weight:
-        800;
-}
-
-
-.change-same {
-
-    color:
-        #6c757d;
-
-    font-weight:
-        800;
-}
-
-
-.change-empty {
-
-    color:
-        #9aa3af;
-
-    font-weight:
-        600;
-}
-
-
-/* =========================================================
-   DEVELOPMENT BADGE
+   STATUS
 ========================================================= */
 
 .badge-status {
 
-    display:
-        inline-flex;
+    display: inline-flex;
 
-    align-items:
-        center;
+    align-items: center;
 
-    justify-content:
-        center;
+    justify-content: center;
 
     padding:
         4px 7px;
 
-    border-radius:
-        6px;
+    border-radius: 6px;
 
-    font-size:
-        9px;
+    font-size: 9px;
 
-    font-weight:
-        700;
+    font-weight: 700;
 
-    white-space:
-        nowrap;
+    white-space: nowrap;
 }
 
 
@@ -1501,47 +2058,188 @@ body {
 
 
 /* =========================================================
+   CHART
+========================================================= */
+
+.chart-wrapper {
+
+    position: relative;
+
+    width: 100%;
+
+    height: 280px;
+}
+
+
+/* =========================================================
+   DEVELOPMENT TABLE
+========================================================= */
+
+.development-table {
+
+    margin: 0;
+}
+
+
+.development-table thead th {
+
+    border-top: 0;
+
+    border-bottom:
+        1px solid
+        #e3e8ef;
+
+    color:
+        #7d8796;
+
+    font-size: 9px;
+
+    font-weight: 750;
+
+    text-transform: uppercase;
+
+    letter-spacing: .04em;
+
+    padding:
+        10px 7px;
+
+    white-space: nowrap;
+}
+
+
+.development-table tbody td {
+
+    border-bottom:
+        1px solid
+        #edf0f4;
+
+    color:
+        #384457;
+
+    font-size: 11px;
+
+    padding:
+        11px 7px;
+
+    vertical-align: middle;
+}
+
+
+.development-table tbody tr:last-child td {
+
+    border-bottom: 0;
+}
+
+
+.development-table tbody tr:hover {
+
+    background:
+        #fafbfd;
+}
+
+
+.development-worker {
+
+    color:
+        #16223a;
+
+    font-weight: 650;
+
+    text-decoration: none;
+
+    display: block;
+
+    max-width: 130px;
+
+    white-space: nowrap;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+}
+
+
+.development-worker:hover {
+
+    color:
+        var(--gf-blue);
+
+    text-decoration: underline;
+}
+
+
+/* =========================================================
+   CHANGE
+========================================================= */
+
+.change-up {
+
+    color:
+        #198754;
+
+    font-weight: 800;
+}
+
+
+.change-down {
+
+    color:
+        #dc3545;
+
+    font-weight: 800;
+}
+
+
+.change-same {
+
+    color:
+        #6c757d;
+
+    font-weight: 800;
+}
+
+
+.change-empty {
+
+    color:
+        #9aa3af;
+
+    font-weight: 600;
+}
+
+
+/* =========================================================
    DEVELOPMENT SUMMARY
 ========================================================= */
 
 .development-summary {
 
-    display:
-        flex;
+    display: flex;
 
-    gap:
-        7px;
+    gap: 7px;
 
-    flex-wrap:
-        wrap;
+    flex-wrap: wrap;
 
-    margin-top:
-        13px;
+    margin-top: 13px;
 }
 
 
 .development-summary-item {
 
-    display:
-        inline-flex;
+    display: inline-flex;
 
-    align-items:
-        center;
+    align-items: center;
 
-    gap:
-        5px;
+    gap: 5px;
 
     padding:
         5px 8px;
 
-    border-radius:
-        6px;
+    border-radius: 6px;
 
-    font-size:
-        9px;
+    font-size: 9px;
 
-    font-weight:
-        700;
+    font-weight: 700;
 }
 
 
@@ -1587,11 +2285,9 @@ body {
     border-color:
         var(--gf-blue-dark) !important;
 
-    font-weight:
-        600;
+    font-weight: 600;
 
-    border-radius:
-        9px;
+    border-radius: 9px;
 }
 
 
@@ -1606,71 +2302,28 @@ body {
 
 
 /* =========================================================
-   EMPTY
-========================================================= */
-
-.development-empty {
-
-    text-align:
-        center;
-
-    padding:
-        35px 15px;
-
-    color:
-        #8a94a4;
-
-    font-size:
-        12px;
-}
-
-
-.development-empty i {
-
-    font-size:
-        30px;
-
-    display:
-        block;
-
-    margin-bottom:
-        8px;
-
-    color:
-        #aab3bf;
-}
-
-
-/* =========================================================
    FLOW
 ========================================================= */
 
 .system-flow {
 
-    display:
-        flex;
+    display: flex;
 
-    align-items:
-        center;
+    align-items: center;
 
-    gap:
-        10px;
+    gap: 10px;
 
-    margin-top:
-        20px;
+    margin-top: 20px;
 
-    overflow-x:
-        auto;
+    overflow-x: auto;
 
-    padding-bottom:
-        3px;
+    padding-bottom: 3px;
 }
 
 
 .flow-item {
 
-    min-width:
-        145px;
+    min-width: 145px;
 
     padding:
         14px 15px;
@@ -1679,39 +2332,31 @@ body {
         1px solid
         #e4e9f0;
 
-    border-radius:
-        12px;
+    border-radius: 12px;
 
     background:
         #fafbfd;
 
-    text-align:
-        center;
+    text-align: center;
 }
 
 
 .flow-number {
 
-    width:
-        27px;
+    width: 27px;
 
-    height:
-        27px;
+    height: 27px;
 
     margin:
         0 auto 8px;
 
-    display:
-        flex;
+    display: flex;
 
-    align-items:
-        center;
+    align-items: center;
 
-    justify-content:
-        center;
+    justify-content: center;
 
-    border-radius:
-        50%;
+    border-radius: 50%;
 
     background:
         var(--gf-blue);
@@ -1719,21 +2364,17 @@ body {
     color:
         #ffffff;
 
-    font-size:
-        11px;
+    font-size: 11px;
 
-    font-weight:
-        700;
+    font-weight: 700;
 }
 
 
 .flow-title {
 
-    font-size:
-        11px;
+    font-size: 11px;
 
-    font-weight:
-        700;
+    font-weight: 700;
 
     color:
         #26344b;
@@ -1745,11 +2386,9 @@ body {
     color:
         #a5adba;
 
-    font-size:
-        17px;
+    font-size: 17px;
 
-    flex-shrink:
-        0;
+    flex-shrink: 0;
 }
 
 
@@ -1761,15 +2400,14 @@ body {
 
     .dashboard-title {
 
-        font-size:
-            24px;
+        font-size: 24px;
     }
 
     .chart-wrapper {
 
-        height:
-            240px;
+        height: 240px;
     }
+
 }
 
 
@@ -1787,11 +2425,13 @@ body {
             20px;
     }
 
+
     .dashboard-title {
 
         font-size:
             22px;
     }
+
 
     .dashboard-description {
 
@@ -1802,6 +2442,7 @@ body {
             1.6;
     }
 
+
     .stat-card {
 
         min-height:
@@ -1811,11 +2452,13 @@ body {
             17px;
     }
 
+
     .stat-value {
 
         font-size:
             23px;
     }
+
 
     .cardx {
 
@@ -1826,6 +2469,7 @@ body {
             14px;
     }
 
+
     .low-score-card {
 
         padding:
@@ -1835,11 +2479,20 @@ body {
             14px;
     }
 
+
+    .dashboard-filter {
+
+        padding:
+            12px;
+    }
+
+
     .low-score-table {
 
         min-width:
-            680px;
+            1050px;
     }
+
 
     .low-score-table thead th,
     .low-score-table tbody td {
@@ -1851,11 +2504,13 @@ body {
             10px;
     }
 
+
     .low-score-skills {
 
         max-width:
             300px;
     }
+
 }
 
 </style>
@@ -1896,7 +2551,9 @@ body {
 
 
     <h1 class="dashboard-title">
+
         Dashboard
+
     </h1>
 
 
@@ -1994,7 +2651,9 @@ body {
 
                             <?= number_format(
                                 $avg,
-                                2
+                                2,
+                                ',',
+                                '.'
                             ) ?>
 
                             <small class="fs-6">
@@ -2063,7 +2722,12 @@ body {
                         "
                     >
 
-                        <i class="bi bi-exclamation-diamond-fill"></i>
+                        <i
+                            class="
+                                bi
+                                bi-exclamation-diamond-fill
+                            "
+                        ></i>
 
                     </div>
 
@@ -2118,7 +2782,12 @@ body {
                         "
                     >
 
-                        <i class="bi bi-mortarboard-fill"></i>
+                        <i
+                            class="
+                                bi
+                                bi-mortarboard-fill
+                            "
+                        ></i>
 
                     </div>
 
@@ -2150,7 +2819,12 @@ body {
 
         <div class="training-alert-icon">
 
-            <i class="bi bi-exclamation-triangle-fill"></i>
+            <i
+                class="
+                    bi
+                    bi-exclamation-triangle-fill
+                "
+            ></i>
 
         </div>
 
@@ -2178,10 +2852,12 @@ body {
                 "
             >
 
-                Menampilkan pekerja dengan nilai rata-rata
-                assessment <strong>≤ 2,5</strong>.
+                Jumlah pekerja dengan rata-rata
+                nilai skill <strong>≤ 2,5</strong>.
 
-                <?php if ($latest_year !== null): ?>
+                <?php if (
+                    $latest_year !== null
+                ): ?>
 
                     Assessment tahun
                     <strong>
@@ -2204,7 +2880,13 @@ body {
             class="btn btn-danger btn-sm"
         >
 
-            <i class="bi bi-arrow-right-circle me-1"></i>
+            <i
+                class="
+                    bi
+                    bi-arrow-right-circle
+                    me-1
+                "
+            ></i>
 
             Lihat Kebutuhan Training
 
@@ -2216,31 +2898,40 @@ body {
 
 
 <!-- =======================================================
-     DAFTAR PEKERJA NILAI <= 2.5
+     SEMUA PEKERJA
 ======================================================= -->
 
 <div class="low-score-card mb-4">
 
+
+    <!-- HEADER -->
+
     <div class="low-score-header">
+
 
         <div>
 
             <div class="low-score-title">
 
                 <i
-                    class="bi bi-person-exclamation me-1"
+                    class="
+                        bi
+                        bi-people-fill
+                        me-1
+                    "
                 ></i>
 
-                Pekerja dengan Nilai ≤ 2,5
+                Semua Pekerja
 
             </div>
 
 
             <div class="low-score-note">
 
-                Daftar pekerja yang memiliki minimal satu
-                skill dengan nilai ≤ 2,5 pada assessment
-                terbaru.
+                Menampilkan seluruh pekerja aktif beserta
+                rata-rata nilai skill pada assessment terbaru.
+                Pekerja dengan rata-rata ≤ 2,5 menjadi
+                prioritas training.
 
             </div>
 
@@ -2256,7 +2947,9 @@ body {
             "
         >
 
-            <?php if ($latest_year !== null): ?>
+            <?php if (
+                $latest_year !== null
+            ): ?>
 
                 <span
                     class="badge-status"
@@ -2266,7 +2959,13 @@ body {
                     "
                 >
 
-                    <i class="bi bi-calendar3 me-1"></i>
+                    <i
+                        class="
+                            bi
+                            bi-calendar3
+                            me-1
+                        "
+                    ></i>
 
                     <?= $latest_year ?>
 
@@ -2277,10 +2976,15 @@ body {
 
             <span class="low-score-count">
 
-                <i class="bi bi-people-fill"></i>
+                <i
+                    class="
+                        bi
+                        bi-people-fill
+                    "
+                ></i>
 
                 <?= number_format(
-                    $training_workers
+                    $filtered_worker_count
                 ) ?>
 
                 Pekerja
@@ -2292,9 +2996,431 @@ body {
     </div>
 
 
-    <?php if (!empty($training_people)): ?>
+    <!-- ===================================================
+         FILTER
+    ==================================================== -->
 
-        <div class="table-responsive">
+    <form
+        method="GET"
+        action="<?= e(
+            $_SERVER['PHP_SELF']
+        ) ?>"
+        class="dashboard-filter"
+    >
+
+
+        <div class="dashboard-filter-title">
+
+            <i
+                class="
+                    bi
+                    bi-funnel-fill
+                    me-1
+                "
+            ></i>
+
+            Filter Pekerja
+
+        </div>
+
+
+        <div class="row g-2">
+
+
+            <!-- NILAI -->
+
+            <div class="col-6 col-md-2">
+
+                <label
+                    class="form-label"
+                >
+
+                    Nilai Rata-rata
+
+                </label>
+
+
+                <select
+                    name="filter_nilai"
+                    class="form-select"
+                >
+
+                    <?php foreach (
+                        $allowed_filter_nilai
+                        as $value =>
+                        $label
+                    ): ?>
+
+                        <option
+                            value="<?= e($value) ?>"
+                            <?= $filter_nilai ===
+                                $value
+                                ? 'selected'
+                                : ''
+                            ?>
+                        >
+
+                            <?= e($label) ?>
+
+                        </option>
+
+                    <?php endforeach; ?>
+
+                </select>
+
+            </div>
+
+
+            <!-- KOMPETENSI -->
+
+            <div class="col-6 col-md-2">
+
+                <label
+                    class="form-label"
+                >
+
+                    Kompetensi
+
+                </label>
+
+
+                <select
+                    name="filter_kompetensi"
+                    class="form-select"
+                >
+
+                    <?php foreach (
+                        $allowed_filter_kompetensi
+                        as $value =>
+                        $label
+                    ): ?>
+
+                        <option
+                            value="<?= e($value) ?>"
+                            <?= $filter_kompetensi ===
+                                $value
+                                ? 'selected'
+                                : ''
+                            ?>
+                        >
+
+                            <?= e($label) ?>
+
+                        </option>
+
+                    <?php endforeach; ?>
+
+                </select>
+
+            </div>
+
+
+            <!-- SKILL -->
+
+            <div class="col-12 col-md-2">
+
+                <label
+                    class="form-label"
+                >
+
+                    Skill
+
+                </label>
+
+
+                <select
+                    name="filter_skill"
+                    class="form-select"
+                >
+
+                    <option value="">
+
+                        Semua Skill
+
+                    </option>
+
+
+                    <?php foreach (
+                        $filter_skills
+                        as $skillName
+                    ): ?>
+
+                        <option
+                            value="<?= e(
+                                $skillName
+                            ) ?>"
+                            <?= $filter_skill ===
+                                $skillName
+                                ? 'selected'
+                                : ''
+                            ?>
+                        >
+
+                            <?= e(
+                                $skillName
+                            ) ?>
+
+                        </option>
+
+                    <?php endforeach; ?>
+
+                </select>
+
+            </div>
+
+
+            <!-- DEPARTEMEN -->
+
+            <div class="col-12 col-md-2">
+
+                <label
+                    class="form-label"
+                >
+
+                    Departemen
+
+                </label>
+
+
+                <select
+                    name="filter_departemen"
+                    class="form-select"
+                >
+
+                    <option value="">
+
+                        Semua Departemen
+
+                    </option>
+
+
+                    <?php foreach (
+                        $filter_departments
+                        as $department
+                    ): ?>
+
+                        <option
+                            value="<?= e(
+                                $department
+                            ) ?>"
+                            <?= $filter_departemen ===
+                                $department
+                                ? 'selected'
+                                : ''
+                            ?>
+                        >
+
+                            <?= e(
+                                $department
+                            ) ?>
+
+                        </option>
+
+                    <?php endforeach; ?>
+
+                </select>
+
+            </div>
+
+
+            <!-- KETERANGAN -->
+
+            <div class="col-12 col-md-2">
+
+                <label
+                    class="form-label"
+                >
+
+                    Keterangan Pekerja
+
+                </label>
+
+
+                <select
+                    name="filter_keterangan"
+                    class="form-select"
+                >
+
+                    <option value="">
+
+                        Semua Keterangan
+
+                    </option>
+
+
+                    <?php foreach (
+                        $filter_keterangan_list
+                        as $keterangan
+                    ): ?>
+
+                        <option
+                            value="<?= e(
+                                $keterangan
+                            ) ?>"
+                            <?= $filter_keterangan ===
+                                $keterangan
+                                ? 'selected'
+                                : ''
+                            ?>
+                        >
+
+                            <?= e(
+                                $keterangan
+                            ) ?>
+
+                        </option>
+
+                    <?php endforeach; ?>
+
+                </select>
+
+            </div>
+
+
+            <!-- TOMBOL -->
+
+            <div
+                class="
+                    col-12
+                    col-md-2
+                    d-flex
+                    align-items-end
+                "
+            >
+
+                <div
+                    class="
+                        d-flex
+                        gap-2
+                        w-100
+                    "
+                >
+
+                    <button
+                        type="submit"
+                        class="
+                            btn
+                            btn-primary
+                            btn-sm
+                            flex-grow-1
+                        "
+                    >
+
+                        <i
+                            class="
+                                bi
+                                bi-funnel-fill
+                                me-1
+                            "
+                        ></i>
+
+                        Terapkan
+
+                    </button>
+
+
+                    <a
+                        href="<?= e(
+                            $_SERVER['PHP_SELF']
+                        ) ?>"
+                        class="
+                            btn
+                            btn-light
+                            border
+                            btn-sm
+                        "
+                        title="Reset Filter"
+                    >
+
+                        <i
+                            class="
+                                bi
+                                bi-arrow-counterclockwise
+                            "
+                        ></i>
+
+                    </a>
+
+                </div>
+
+            </div>
+
+
+        </div>
+
+
+        <!-- STATUS FILTER -->
+
+        <div class="filter-status">
+
+            <?php if (
+                $filter_active_count > 0
+            ): ?>
+
+                <i
+                    class="
+                        bi
+                        bi-check-circle-fill
+                        me-1
+                    "
+                ></i>
+
+                <strong>
+                    <?= number_format(
+                        $filtered_worker_count
+                    ) ?>
+                </strong>
+
+                pekerja ditemukan dengan
+                <strong>
+                    <?= number_format(
+                        $filter_active_count
+                    ) ?>
+                filter aktif.
+
+            <?php else: ?>
+
+                <i
+                    class="
+                        bi
+                        bi-info-circle
+                        me-1
+                    "
+                ></i>
+
+                Semua pekerja aktif ditampilkan.
+
+                <strong>
+                    <?= number_format(
+                        $filtered_worker_count
+                    ) ?>
+                </strong>
+                pekerja.
+
+            <?php endif; ?>
+
+        </div>
+
+
+    </form>
+
+
+    <!-- ===================================================
+         TABLE
+    ==================================================== -->
+
+    <?php if (
+        !empty(
+            $training_people
+        )
+    ): ?>
+
+
+        <div
+            class="
+                table-responsive
+            "
+        >
 
             <table
                 class="
@@ -2302,6 +3428,7 @@ body {
                     low-score-table
                 "
             >
+
 
                 <thead>
 
@@ -2311,20 +3438,62 @@ body {
                             Pekerja
                         </th>
 
-                        <th class="text-center">
-                            Nilai Terendah
+                        <th
+                            class="
+                                text-center
+                            "
+                        >
+
+                            Rata-rata
+
                         </th>
 
-                        <th class="text-center">
-                            Skill Gap
+                        <th
+                            class="
+                                text-center
+                            "
+                        >
+
+                            Jumlah Skill
+
+                        </th>
+
+                        <th
+                            class="
+                                text-center
+                            "
+                        >
+
+                            Skill ≤ 2,5
+
                         </th>
 
                         <th>
                             Skill yang Perlu Training
                         </th>
 
-                        <th class="text-center">
+                        <th>
+                            Keterangan
+                        </th>
+
+                        <th
+                            class="
+                                text-center
+                            "
+                        >
+
+                            Status
+
+                        </th>
+
+                        <th
+                            class="
+                                text-center
+                            "
+                        >
+
                             Detail
+
                         </th>
 
                     </tr>
@@ -2334,23 +3503,70 @@ body {
 
                 <tbody>
 
+
                 <?php foreach (
                     $training_people
                     as $tp
                 ): ?>
 
+
+                    <?php
+
+                    $rataSkill =
+                        $tp['rata_skill'] !== null
+                        &&
+                        $tp['rata_skill'] !== ''
+                            ? (float)
+                                $tp['rata_skill']
+                            : null;
+
+
+                    $jumlahGap =
+                        (int)(
+                            $tp['jumlah_gap']
+                            ?? 0
+                        );
+
+
+                    $jumlahSkill =
+                        (int)(
+                            $tp['jumlah_skill']
+                            ?? 0
+                        );
+
+
+                    $keterangan =
+                        trim(
+                            (string)(
+                                $tp[
+                                    'keterangan'
+                                ]
+                                ?? ''
+                            )
+                        );
+
+
+                    $isTraining =
+                        $rataSkill !== null
+                        &&
+                        $rataSkill <= 2.5;
+
+                    ?>
+
+
                     <tr>
 
-                        <!-- =================================
-                             PEKERJA + KETERANGAN
-                        ================================== -->
+
+                        <!-- PEKERJA -->
 
                         <td>
 
                             <a
                                 href="<?= $base ?>pekerja/detail.php?id=<?= (int)$tp['id'] ?>"
                                 class="low-score-worker"
-                                title="<?= e($tp['nama']) ?>"
+                                title="<?= e(
+                                    $tp['nama']
+                                ) ?>"
                             >
 
                                 <?= e(
@@ -2360,129 +3576,204 @@ body {
                             </a>
 
 
-                            <!--
-                                FORMAT:
-
-                                No. Reg: 12345
-                                • Departemen: Teknik PSPD, PDP, PGMJ
-                                • Crew B
-                            -->
-
                             <div
-                                class="low-score-meta"
+                                class="
+                                    low-score-meta
+                                "
                             >
 
                                 <?php
-                                $metaParts = [];
-                                ?>
+
+                                $meta = [];
 
 
-                                <?php if (
-                                    !empty($tp['no_reg'])
-                                ): ?>
+                                if (
+                                    !empty(
+                                        $tp['no_reg']
+                                    )
+                                ) {
 
-                                    <?php
-                                    $metaParts[] =
+                                    $meta[] =
                                         'No. Reg: ' .
-                                        e($tp['no_reg']);
-                                    ?>
+                                        e(
+                                            $tp[
+                                                'no_reg'
+                                            ]
+                                        );
 
-                                <?php endif; ?>
+                                }
 
 
-                                <?php if (
-                                    !empty($tp['departemen'])
-                                ): ?>
+                                if (
+                                    !empty(
+                                        $tp[
+                                            'departemen'
+                                        ]
+                                    )
+                                ) {
 
-                                    <?php
-                                    $metaParts[] =
+                                    $meta[] =
                                         'Departemen: ' .
-                                        e($tp['departemen']);
-                                    ?>
+                                        e(
+                                            $tp[
+                                                'departemen'
+                                            ]
+                                        );
 
-                                <?php endif; ?>
-
-
-                                <?php if (
-                                    !empty($tp['keterangan'])
-                                ): ?>
-
-                                    <?php
-                                    $metaParts[] =
-                                        e($tp['keterangan']);
-                                    ?>
-
-                                <?php endif; ?>
+                                }
 
 
-                                <?= implode(
+                                if (
+                                    $keterangan !== ''
+                                ) {
+
+                                    $meta[] =
+                                        e(
+                                            $keterangan
+                                        );
+
+                                }
+
+
+                                echo implode(
                                     ' <span class="mx-1">•</span> ',
-                                    $metaParts
-                                ) ?>
+                                    $meta
+                                );
+
+                                ?>
 
                             </div>
 
                         </td>
 
 
-                        <!-- =================================
-                             NILAI TERENDAH
-                        ================================== -->
+                        <!-- RATA-RATA -->
 
-                        <td class="text-center">
+                        <td
+                            class="
+                                text-center
+                            "
+                        >
 
-                            <span
-                                class="low-score-value"
-                            >
+                            <?php if (
+                                $rataSkill !== null
+                            ): ?>
 
-                                <?= number_format(
-                                    (float)$tp['nilai_min'],
-                                    2,
-                                    ',',
-                                    '.'
-                                ) ?>
+                                <span
+                                    class="
+                                        low-score-value
+                                        <?= $isTraining
+                                            ? 'is-training'
+                                            : ''
+                                        ?>
+                                    "
+                                >
 
-                            </span>
+                                    <?= number_format(
+                                        $rataSkill,
+                                        2,
+                                        ',',
+                                        '.'
+                                    ) ?>
+
+                                </span>
+
+                            <?php else: ?>
+
+                                <span
+                                    class="
+                                        text-muted
+                                    "
+                                >
+                                    -
+                                </span>
+
+                            <?php endif; ?>
 
                         </td>
 
 
-                        <!-- =================================
-                             JUMLAH GAP
-                        ================================== -->
+                        <!-- JUMLAH SKILL -->
 
-                        <td class="text-center">
+                        <td
+                            class="
+                                text-center
+                            "
+                        >
 
-                            <span
-                                class="low-score-gap"
-                            >
-
-                                <?= number_format(
-                                    (int)$tp['jumlah_gap']
-                                ) ?>
-
-                                skill
-
-                            </span>
+                            <?= number_format(
+                                $jumlahSkill
+                            ) ?>
 
                         </td>
 
 
-                        <!-- =================================
-                             SKILL GAP
-                        ================================== -->
+                        <!-- SKILL GAP -->
+
+                        <td
+                            class="
+                                text-center
+                            "
+                        >
+
+                            <?php if (
+                                $jumlahGap > 0
+                            ): ?>
+
+                                <span
+                                    class="
+                                        low-score-gap
+                                    "
+                                >
+
+                                    <?= number_format(
+                                        $jumlahGap
+                                    ) ?>
+
+                                    skill
+
+                                </span>
+
+                            <?php else: ?>
+
+                                <span
+                                    style="
+                                        color:#198754;
+                                        font-size:10px;
+                                        font-weight:700;
+                                    "
+                                >
+
+                                    0 skill
+
+                                </span>
+
+                            <?php endif; ?>
+
+                        </td>
+
+
+                        <!-- SKILL -->
 
                         <td>
 
                             <div
-                                class="low-score-skills"
+                                class="
+                                    low-score-skills
+                                "
                                 title="<?= e(
-                                    $tp['skill_gap'] ?? ''
+                                    $tp[
+                                        'skill_gap'
+                                    ]
+                                    ?? ''
                                 ) ?>"
                             >
 
                                 <?= e(
-                                    $tp['skill_gap'] ?? '-'
+                                    $tp[
+                                        'skill_gap'
+                                    ]
+                                    ?: '-'
                                 ) ?>
 
                             </div>
@@ -2490,11 +3781,127 @@ body {
                         </td>
 
 
-                        <!-- =================================
-                             DETAIL
-                        ================================== -->
+                        <!-- KETERANGAN -->
 
-                        <td class="text-center">
+                        <td>
+
+                            <?php if (
+                                $keterangan !== ''
+                            ): ?>
+
+                                <span
+                                    class="
+                                        badge-status
+                                    "
+                                    style="
+                                        background:#f1f3f5;
+                                        color:#495057;
+                                    "
+                                >
+
+                                    <?= e(
+                                        $keterangan
+                                    ) ?>
+
+                                </span>
+
+                            <?php else: ?>
+
+                                <span
+                                    class="
+                                        text-muted
+                                        small
+                                    "
+                                >
+
+                                    -
+
+                                </span>
+
+                            <?php endif; ?>
+
+                        </td>
+
+
+                        <!-- STATUS -->
+
+                        <td
+                            class="
+                                text-center
+                            "
+                        >
+
+                            <?php if (
+                                $rataSkill === null
+                            ): ?>
+
+                                <span
+                                    class="
+                                        badge-status
+                                        status-mid
+                                    "
+                                >
+
+                                    Belum Dinilai
+
+                                </span>
+
+                            <?php elseif (
+                                $rataSkill <= 2.5
+                            ): ?>
+
+                                <span
+                                    class="
+                                        badge-status
+                                        status-bad
+                                    "
+                                >
+
+                                    <i
+                                        class="
+                                            bi
+                                            bi-exclamation-circle
+                                            me-1
+                                        "
+                                    ></i>
+
+                                    Butuh Training
+
+                                </span>
+
+                            <?php else: ?>
+
+                                <span
+                                    class="
+                                        badge-status
+                                        status-good
+                                    "
+                                >
+
+                                    <i
+                                        class="
+                                            bi
+                                            bi-check-circle
+                                            me-1
+                                        "
+                                    ></i>
+
+                                    Memenuhi
+
+                                </span>
+
+                            <?php endif; ?>
+
+                        </td>
+
+
+                        <!-- DETAIL -->
+
+                        <td
+                            class="
+                                text-center
+                            "
+                        >
 
                             <a
                                 href="<?= $base ?>pekerja/detail.php?id=<?= (int)$tp['id'] ?>"
@@ -2508,16 +3915,22 @@ body {
                             >
 
                                 <i
-                                    class="bi bi-eye"
+                                    class="
+                                        bi
+                                        bi-eye
+                                    "
                                 ></i>
 
                             </a>
 
                         </td>
 
+
                     </tr>
 
+
                 <?php endforeach; ?>
+
 
                 </tbody>
 
@@ -2526,72 +3939,32 @@ body {
         </div>
 
 
-        <?php if (
-            $training_workers >
-            count($training_people)
-        ): ?>
-
-            <div
-                class="
-                    text-center
-                    border-top
-                    pt-2
-                    mt-1
-                "
-            >
-
-                <a
-                    href="<?= $base ?>training/kebutuhan.php"
-                    class="
-                        text-decoration-none
-                        small
-                        fw-semibold
-                    "
-                    style="
-                        color:#123f7a;
-                    "
-                >
-
-                    Lihat
-                    <?= number_format(
-                        $training_workers
-                    ) ?>
-
-                    pekerja yang membutuhkan training
-
-                    <i
-                        class="
-                            bi
-                            bi-arrow-right
-                            ms-1
-                        "
-                    ></i>
-
-                </a>
-
-            </div>
-
-        <?php endif; ?>
-
-
     <?php else: ?>
 
 
-        <div class="low-score-empty">
+        <div
+            class="
+                low-score-empty
+            "
+        >
 
             <i
                 class="
                     bi
-                    bi-check-circle-fill
+                    bi-search
                 "
             ></i>
 
-            Tidak ada pekerja dengan nilai ≤ 2,5
-            pada assessment terbaru.
+
+            Tidak ada pekerja yang
+            sesuai dengan filter.
+
 
         </div>
 
+
     <?php endif; ?>
+
 
 </div>
 
@@ -2666,9 +4039,13 @@ body {
 
             <div class="chart-wrapper">
 
-                <?php if (!empty($labels)): ?>
+                <?php if (
+                    !empty($labels)
+                ): ?>
 
-                    <canvas id="skillChart"></canvas>
+                    <canvas
+                        id="skillChart"
+                    ></canvas>
 
                 <?php else: ?>
 
@@ -2695,7 +4072,8 @@ body {
                                 "
                             ></i>
 
-                            Belum ada data assessment.
+                            Belum ada data
+                            assessment.
 
                         </div>
 
@@ -2774,7 +4152,11 @@ body {
 
             <!-- SUMMARY -->
 
-            <div class="development-summary">
+            <div
+                class="
+                    development-summary
+                "
+            >
 
                 <span
                     class="
@@ -2784,7 +4166,10 @@ body {
                 >
 
                     <i
-                        class="bi bi-arrow-up"
+                        class="
+                            bi
+                            bi-arrow-up
+                        "
                     ></i>
 
                     <?= number_format(
@@ -2804,7 +4189,10 @@ body {
                 >
 
                     <i
-                        class="bi bi-arrow-down"
+                        class="
+                            bi
+                            bi-arrow-down
+                        "
                     ></i>
 
                     <?= number_format(
@@ -2824,7 +4212,10 @@ body {
                 >
 
                     <i
-                        class="bi bi-dash"
+                        class="
+                            bi
+                            bi-dash
+                        "
                     ></i>
 
                     <?= number_format(
@@ -2860,19 +4251,35 @@ body {
                                 Pekerja
                             </th>
 
-                            <th class="text-center">
+                            <th
+                                class="
+                                    text-center
+                                "
+                            >
                                 2025
                             </th>
 
-                            <th class="text-center">
+                            <th
+                                class="
+                                    text-center
+                                "
+                            >
                                 2026
                             </th>
 
-                            <th class="text-center">
+                            <th
+                                class="
+                                    text-center
+                                "
+                            >
                                 Perubahan
                             </th>
 
-                            <th class="text-center">
+                            <th
+                                class="
+                                    text-center
+                                "
+                            >
                                 Status
                             </th>
 
@@ -2882,6 +4289,7 @@ body {
 
 
                     <tbody>
+
 
                     <?php if (
                         !empty(
@@ -2902,9 +4310,11 @@ body {
                                 $r['y25'] !== null &&
                                 $r['y25'] !== '';
 
+
                             $has26 =
                                 $r['y26'] !== null &&
                                 $r['y26'] !== '';
+
 
                             $delta =
                                 $r['delta'];
@@ -2932,12 +4342,14 @@ body {
 
                                     $changeClass =
                                         'change-same';
+
                                 }
 
                             } else {
 
                                 $changeClass =
                                     'change-empty';
+
                             }
 
                             ?>
@@ -2952,8 +4364,12 @@ body {
 
                                     <a
                                         href="<?= $base ?>pekerja/detail.php?id=<?= (int)$r['id'] ?>"
-                                        class="development-worker"
-                                        title="<?= e($r['nama']) ?>"
+                                        class="
+                                            development-worker
+                                        "
+                                        title="<?= e(
+                                            $r['nama']
+                                        ) ?>"
                                     >
 
                                         <?= e(
@@ -2967,7 +4383,11 @@ body {
 
                                 <!-- 2025 -->
 
-                                <td class="text-center">
+                                <td
+                                    class="
+                                        text-center
+                                    "
+                                >
 
                                     <?php if (
                                         $has25
@@ -2985,9 +4405,13 @@ body {
                                     <?php else: ?>
 
                                         <span
-                                            class="text-muted"
+                                            class="
+                                                text-muted
+                                            "
                                         >
+
                                             -
+
                                         </span>
 
                                     <?php endif; ?>
@@ -2997,7 +4421,11 @@ body {
 
                                 <!-- 2026 -->
 
-                                <td class="text-center">
+                                <td
+                                    class="
+                                        text-center
+                                    "
+                                >
 
                                     <?php if (
                                         $has26
@@ -3015,9 +4443,13 @@ body {
                                     <?php else: ?>
 
                                         <span
-                                            class="text-muted"
+                                            class="
+                                                text-muted
+                                            "
                                         >
+
                                             -
+
                                         </span>
 
                                     <?php endif; ?>
@@ -3040,7 +4472,8 @@ body {
 
                                         <?= $delta >= 0
                                             ? '+'
-                                            : '' ?>
+                                            : ''
+                                        ?>
 
                                         <?= number_format(
                                             $delta,
@@ -3058,19 +4491,27 @@ body {
 
                                 <!-- STATUS -->
 
-                                <td class="text-center">
+                                <td
+                                    class="
+                                        text-center
+                                    "
+                                >
 
                                     <span
                                         class="
                                             badge-status
                                             <?= e(
-                                                $r['statusClass']
+                                                $r[
+                                                    'statusClass'
+                                                ]
                                             ) ?>
                                         "
                                     >
 
                                         <?= e(
-                                            $r['statusText']
+                                            $r[
+                                                'statusText'
+                                            ]
                                         ) ?>
 
                                     </span>
@@ -3091,7 +4532,9 @@ body {
 
                             <td
                                 colspan="5"
-                                class="text-center"
+                                class="
+                                    text-center
+                                "
                             >
 
                                 <div
@@ -3208,7 +4651,8 @@ body {
                         "
                     >
 
-                        Alur Sistem Skill Monitoring
+                        Alur Sistem
+                        Skill Monitoring
 
                     </div>
 
@@ -3375,7 +4819,9 @@ body {
      CHART.JS
 ======================================================= -->
 
-<?php if (!empty($labels)): ?>
+<?php if (
+    !empty($labels)
+): ?>
 
 <script>
 
@@ -3411,14 +4857,12 @@ document.addEventListener(
             canvas,
             {
 
-                type:
-                    'line',
+                type: 'line',
 
 
                 data: {
 
-                    labels:
-                        labels,
+                    labels: labels,
 
 
                     datasets: [

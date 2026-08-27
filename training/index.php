@@ -1,5 +1,10 @@
 <?php
 
+/* =========================================================
+   GARUDAFOOD SKILL MONITORING
+   JADWAL TRAINING
+========================================================= */
+
 $page_title = 'Jadwal Training';
 
 require __DIR__ . '/../partials/header.php';
@@ -47,8 +52,10 @@ $qSkills = $conn->query("
 
 if ($qSkills) {
 
-    while ($s = $qSkills->fetch_assoc()) {
-        $skills[] = $s;
+    while ($row = $qSkills->fetch_assoc()) {
+
+        $skills[] = $row;
+
     }
 
 }
@@ -70,15 +77,17 @@ $qJabatan = $conn->query("
 
 if ($qJabatan) {
 
-    while ($j = $qJabatan->fetch_assoc()) {
-        $jabatan[] = $j;
+    while ($row = $qJabatan->fetch_assoc()) {
+
+        $jabatan[] = $row;
+
     }
 
 }
 
 
 /* =========================================================
-   TAMBAH / EDIT
+   POST ACTION
 ========================================================= */
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -87,7 +96,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
     /* =====================================================
-       SIMPAN
+       SIMPAN / UPDATE
     ===================================================== */
 
     if ($action === 'save') {
@@ -157,6 +166,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error =
                 'Status training tidak valid.';
 
+        } elseif (
+            $tanggal_mulai !== null &&
+            $tanggal_selesai !== null &&
+            $tanggal_selesai < $tanggal_mulai
+        ) {
+
+            $error =
+                'Tanggal selesai tidak boleh sebelum tanggal mulai.';
+
         }
 
 
@@ -165,6 +183,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ================================================= */
 
         if ($error === '') {
+
+            /* =============================================
+               UPDATE
+            ============================================= */
 
             if ($id > 0) {
 
@@ -182,6 +204,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         catatan = ?
                     WHERE id = ?
                 ");
+
 
                 if (!$stmt) {
 
@@ -208,22 +231,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     if ($stmt->execute()) {
 
+                        $stmt->close();
+
                         header(
                             'Location: index.php?updated=1'
                         );
 
                         exit;
 
-                    } else {
-
-                        $error =
-                            'Jadwal training gagal diperbarui: '
-                            . $stmt->error;
                     }
+
+
+                    $error =
+                        'Jadwal training gagal diperbarui: '
+                        . $stmt->error;
+
+                    $stmt->close();
 
                 }
 
-            } else {
+
+            }
+
+            /* =============================================
+               INSERT
+            ============================================= */
+
+            else {
 
                 $stmt = $conn->prepare("
                     INSERT INTO training
@@ -277,18 +311,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     if ($stmt->execute()) {
 
+                        $stmt->close();
+
                         header(
                             'Location: index.php?saved=1'
                         );
 
                         exit;
 
-                    } else {
-
-                        $error =
-                            'Jadwal training gagal dibuat: '
-                            . $stmt->error;
                     }
+
+
+                    $error =
+                        'Jadwal training gagal dibuat: '
+                        . $stmt->error;
+
+                    $stmt->close();
 
                 }
 
@@ -309,21 +347,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             (int) ($_POST['id'] ?? 0);
 
 
-        if ($id > 0) {
+        if ($id <= 0) {
+
+            $error =
+                'ID training tidak valid.';
+
+        } else {
 
             $stmt = $conn->prepare("
                 DELETE FROM training
                 WHERE id = ?
             ");
 
-            if ($stmt) {
+
+            if (!$stmt) {
+
+                $error =
+                    'Gagal menyiapkan query hapus: '
+                    . $conn->error;
+
+            } else {
 
                 $stmt->bind_param(
                     'i',
                     $id
                 );
 
+
                 if ($stmt->execute()) {
+
+                    $stmt->close();
 
                     header(
                         'Location: index.php?deleted=1'
@@ -331,16 +384,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     exit;
 
-                } else {
-
-                    $error =
-                        'Training gagal dihapus.';
                 }
 
-            } else {
 
                 $error =
-                    'Gagal menyiapkan query hapus.';
+                    'Training gagal dihapus: '
+                    . $stmt->error;
+
+                $stmt->close();
+
             }
 
         }
@@ -358,7 +410,7 @@ $filter_jabatan =
     (int) ($_GET['jabatan'] ?? 0);
 
 $filter_status =
-    $_GET['status'] ?? '';
+    trim($_GET['status'] ?? '');
 
 $keyword =
     trim($_GET['q'] ?? '');
@@ -373,7 +425,9 @@ $params = [];
 $types  = '';
 
 
-/* SEARCH */
+/* =========================================================
+   SEARCH
+========================================================= */
 
 if ($keyword !== '') {
 
@@ -382,23 +436,34 @@ if ($keyword !== '') {
             t.nama_training LIKE ?
             OR COALESCE(t.trainer, '') LIKE ?
             OR COALESCE(t.lokasi, '') LIKE ?
+            OR COALESCE(t.catatan, '') LIKE ?
             OR COALESCE(s.nama_skill, '') LIKE ?
             OR COALESCE(j.nama_jabatan, '') LIKE ?
         )
     ";
 
+
     $like =
         '%' . $keyword . '%';
 
-    for ($i = 0; $i < 5; $i++) {
-        $params[] = $like;
-    }
 
-    $types .= 'sssss';
+    $params[] = $like;
+    $params[] = $like;
+    $params[] = $like;
+    $params[] = $like;
+    $params[] = $like;
+    $params[] = $like;
+
+
+    $types .=
+        'ssssss';
+
 }
 
 
-/* FILTER JABATAN */
+/* =========================================================
+   FILTER JABATAN
+========================================================= */
 
 if ($filter_jabatan > 0) {
 
@@ -408,22 +473,29 @@ if ($filter_jabatan > 0) {
     $params[] =
         $filter_jabatan;
 
-    $types .= 'i';
+    $types .=
+        'i';
+
 }
 
 
-/* FILTER STATUS */
+/* =========================================================
+   FILTER STATUS
+========================================================= */
+
+$valid_status = [
+    'Terjadwal',
+    'Berlangsung',
+    'Selesai',
+    'Terlambat',
+    'Dibatalkan'
+];
+
 
 if (
     in_array(
         $filter_status,
-        [
-            'Terjadwal',
-            'Berlangsung',
-            'Selesai',
-            'Terlambat',
-            'Dibatalkan'
-        ],
+        $valid_status,
         true
     )
 ) {
@@ -434,12 +506,14 @@ if (
     $params[] =
         $filter_status;
 
-    $types .= 's';
+    $types .=
+        's';
+
 }
 
 
 /* =========================================================
-   SQL
+   SQL DATA
 ========================================================= */
 
 $sql = "
@@ -464,14 +538,20 @@ if (!empty($where)) {
 
     $sql .=
         ' WHERE ' .
-        implode(' AND ', $where);
+        implode(
+            ' AND ',
+            $where
+        );
+
 }
 
 
 $sql .= "
+
     ORDER BY
 
         CASE
+
             WHEN t.status = 'Berlangsung'
                 THEN 1
 
@@ -484,7 +564,11 @@ $sql .= "
             WHEN t.status = 'Selesai'
                 THEN 4
 
-            ELSE 5
+            WHEN t.status = 'Dibatalkan'
+                THEN 5
+
+            ELSE 6
+
         END,
 
         t.tanggal_mulai ASC,
@@ -517,7 +601,15 @@ if (!empty($params)) {
 }
 
 
-$stmt->execute();
+if (!$stmt->execute()) {
+
+    die(
+        'Gagal mengambil data training: '
+        . e($stmt->error)
+    );
+
+}
+
 
 $rows =
     $stmt->get_result();
@@ -528,9 +620,11 @@ $rows =
 ========================================================= */
 
 $total_training = 0;
-$terjadwal       = 0;
-$berlangsung     = 0;
-$selesai         = 0;
+$terjadwal      = 0;
+$berlangsung    = 0;
+$selesai        = 0;
+$terlambat      = 0;
+$dibatalkan     = 0;
 
 
 $qStat = $conn->query("
@@ -548,7 +642,15 @@ $qStat = $conn->query("
 
         SUM(
             status = 'Selesai'
-        ) AS selesai
+        ) AS selesai,
+
+        SUM(
+            status = 'Terlambat'
+        ) AS terlambat,
+
+        SUM(
+            status = 'Dibatalkan'
+        ) AS dibatalkan
 
     FROM training
 ");
@@ -556,129 +658,484 @@ $qStat = $conn->query("
 
 if ($qStat) {
 
-    $st =
+    $stat =
         $qStat->fetch_assoc();
 
+
     $total_training =
-        (int) ($st['total'] ?? 0);
+        (int) ($stat['total'] ?? 0);
 
     $terjadwal =
-        (int) ($st['terjadwal'] ?? 0);
+        (int) ($stat['terjadwal'] ?? 0);
 
     $berlangsung =
-        (int) ($st['berlangsung'] ?? 0);
+        (int) ($stat['berlangsung'] ?? 0);
 
     $selesai =
-        (int) ($st['selesai'] ?? 0);
+        (int) ($stat['selesai'] ?? 0);
+
+    $terlambat =
+        (int) ($stat['terlambat'] ?? 0);
+
+    $dibatalkan =
+        (int) ($stat['dibatalkan'] ?? 0);
+
 }
+
+
+/* =========================================================
+   FUNGSI STATUS
+========================================================= */
+
+function trainingStatusClass($status)
+{
+
+    switch ($status) {
+
+        case 'Terjadwal':
+            return 'status-terjadwal';
+
+        case 'Berlangsung':
+            return 'status-berlangsung';
+
+        case 'Selesai':
+            return 'status-selesai';
+
+        case 'Terlambat':
+            return 'status-terlambat';
+
+        case 'Dibatalkan':
+            return 'status-dibatalkan';
+
+        default:
+            return 'status-default';
+
+    }
+
+}
+
+
+function trainingStatusIcon($status)
+{
+
+    switch ($status) {
+
+        case 'Terjadwal':
+            return 'bi-clock';
+
+        case 'Berlangsung':
+            return 'bi-play-circle';
+
+        case 'Selesai':
+            return 'bi-check-circle';
+
+        case 'Terlambat':
+            return 'bi-exclamation-circle';
+
+        case 'Dibatalkan':
+            return 'bi-x-circle';
+
+        default:
+            return 'bi-info-circle';
+
+    }
+
+}
+
+
+/* =========================================================
+   FUNGSI JABATAN
+========================================================= */
+
+function isLeaderJabatan($nama)
+{
+
+    $nama =
+        strtolower(
+            (string) $nama
+        );
+
+
+    return
+        strpos(
+            $nama,
+            'leader'
+        ) !== false
+
+        ||
+
+        strpos(
+            $nama,
+            'supervisor'
+        ) !== false
+
+        ||
+
+        strpos(
+            $nama,
+            'koordinator'
+        ) !== false
+
+        ||
+
+        strpos(
+            $nama,
+            'kepala'
+        ) !== false;
+
+}
+
+
+/* =========================================================
+   DATA TABEL KE ARRAY
+=========================================================
+
+   Kita masukkan hasil query ke array supaya data edit
+   bisa dikirim dengan aman menggunakan data-* attribute.
+
+========================================================= */
+
+$training_rows = [];
+
+while ($row = $rows->fetch_assoc()) {
+
+    $training_rows[] = $row;
+
+}
+
+$stmt->close();
 
 ?>
 
 <style>
 
 /* =========================================================
-   TRAINING PAGE
+   PAGE
 ========================================================= */
 
-.training-card {
-    background: #fff;
+.training-page-card {
+
+    background: #ffffff;
+
     border: 1px solid #e7ebf1;
+
     border-radius: 17px;
-    box-shadow: 0 5px 20px rgba(20,43,76,.045);
+
+    box-shadow:
+        0 5px 20px
+        rgba(20,43,76,.045);
+
 }
+
+
+/* =========================================================
+   STAT
+========================================================= */
 
 .training-stat {
+
     padding: 20px;
+
     border-radius: 16px;
-    background: #fff;
+
+    background: #ffffff;
+
     border: 1px solid #e7ebf1;
+
+    box-shadow:
+        0 5px 20px
+        rgba(20,43,76,.035);
+
+    height: 100%;
+
 }
+
 
 .training-stat-icon {
+
     width: 48px;
+
     height: 48px;
+
     border-radius: 13px;
+
     display: flex;
+
     align-items: center;
+
     justify-content: center;
+
     font-size: 20px;
+
 }
+
+
+/* =========================================================
+   TABLE
+========================================================= */
+
+.training-table {
+
+    margin-bottom: 0;
+
+}
+
 
 .training-table th {
+
     color: #7d8796;
+
     font-size: 10px;
+
+    font-weight: 700;
+
     text-transform: uppercase;
+
     letter-spacing: .05em;
-    border-bottom: 1px solid #e3e8ef;
+
+    border-bottom:
+        1px solid #e3e8ef;
+
     white-space: nowrap;
+
+    padding:
+        11px 8px;
+
 }
+
 
 .training-table td {
-    font-size: 12px;
+
+    color: #384457;
+
+    font-size: 11px;
+
     vertical-align: middle;
-    border-bottom: 1px solid #edf0f4;
+
+    border-bottom:
+        1px solid #edf0f4;
+
+    padding:
+        11px 8px;
+
 }
+
+
+.training-table tbody tr:last-child td {
+
+    border-bottom: 0;
+
+}
+
+
+.training-table tbody tr:hover {
+
+    background:
+        #fafbfd;
+
+}
+
+
+/* =========================================================
+   TRAINING NAME
+========================================================= */
 
 .training-name {
+
     color: #16223a;
+
+    font-size: 11px;
+
     font-weight: 700;
+
+    line-height: 1.45;
+
 }
+
+
+/* =========================================================
+   JABATAN
+========================================================= */
 
 .jabatan-badge {
+
     display: inline-flex;
+
     align-items: center;
+
     gap: 5px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    font-size: 10px;
+
+    padding: 5px 8px;
+
+    border-radius: 7px;
+
+    font-size: 9px;
+
     font-weight: 700;
-    background: #eaf2ff;
-    color: #123f7a;
+
+    white-space: nowrap;
+
+    background:
+        #eaf2ff;
+
+    color:
+        #123f7a;
+
 }
+
 
 .jabatan-leader {
-    background: #fff4d8;
-    color: #9a6700;
+
+    background:
+        #fff4d8;
+
+    color:
+        #9a6700;
+
 }
+
 
 .jabatan-pelaksana {
-    background: #eaf2ff;
-    color: #123f7a;
+
+    background:
+        #eaf2ff;
+
+    color:
+        #123f7a;
+
 }
+
+
+/* =========================================================
+   STATUS
+========================================================= */
 
 .status-training {
+
     display: inline-flex;
+
     align-items: center;
+
     gap: 5px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    font-size: 10px;
+
+    padding: 5px 8px;
+
+    border-radius: 7px;
+
+    font-size: 9px;
+
     font-weight: 700;
+
+    white-space: nowrap;
+
 }
+
 
 .status-terjadwal {
-    background: #eaf2ff;
-    color: #123f7a;
+
+    background:
+        #eaf2ff;
+
+    color:
+        #123f7a;
+
 }
+
 
 .status-berlangsung {
-    background: #fff4d8;
-    color: #9a6700;
+
+    background:
+        #fff4d8;
+
+    color:
+        #9a6700;
+
 }
+
 
 .status-selesai {
-    background: #e9f8f0;
-    color: #198754;
+
+    background:
+        #e9f8f0;
+
+    color:
+        #198754;
+
 }
+
 
 .status-terlambat {
-    background: #ffecee;
-    color: #dc3545;
+
+    background:
+        #ffecee;
+
+    color:
+        #dc3545;
+
 }
 
+
 .status-dibatalkan {
-    background: #f0f1f3;
-    color: #6c757d;
+
+    background:
+        #f0f1f3;
+
+    color:
+        #6c757d;
+
+}
+
+
+.status-default {
+
+    background:
+        #f0f1f3;
+
+    color:
+        #6c757d;
+
+}
+
+
+/* =========================================================
+   FILTER
+========================================================= */
+
+.training-filter {
+
+    background:
+        #f8fafc;
+
+    border:
+        1px solid #e7ebf1;
+
+    border-radius:
+        12px;
+
+    padding:
+        15px;
+
+}
+
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media (max-width: 768px) {
+
+    .training-stat {
+
+        padding: 16px;
+
+    }
+
+    .training-table {
+
+        min-width: 1050px;
+
+    }
+
 }
 
 </style>
@@ -690,9 +1147,27 @@ if ($qStat) {
 
 <?php if ($success !== ''): ?>
 
-<div class="alert alert-success border-0 shadow-sm">
-    <i class="bi bi-check-circle-fill me-2"></i>
+<div
+    class="
+        alert
+        alert-success
+        border-0
+        shadow-sm
+        d-flex
+        align-items-center
+    "
+>
+
+    <i
+        class="
+            bi
+            bi-check-circle-fill
+            me-2
+        "
+    ></i>
+
     <?= e($success) ?>
+
 </div>
 
 <?php endif; ?>
@@ -700,9 +1175,27 @@ if ($qStat) {
 
 <?php if ($error !== ''): ?>
 
-<div class="alert alert-danger border-0 shadow-sm">
-    <i class="bi bi-exclamation-triangle-fill me-2"></i>
+<div
+    class="
+        alert
+        alert-danger
+        border-0
+        shadow-sm
+        d-flex
+        align-items-center
+    "
+>
+
+    <i
+        class="
+            bi
+            bi-exclamation-triangle-fill
+            me-2
+        "
+    ></i>
+
     <?= e($error) ?>
+
 </div>
 
 <?php endif; ?>
@@ -714,11 +1207,20 @@ if ($qStat) {
 
 <div class="row g-3 mb-4">
 
+
+    <!-- TOTAL -->
+
     <div class="col-xl-3 col-md-6">
 
-        <div class="training-stat h-100">
+        <div class="training-stat">
 
-            <div class="d-flex align-items-center gap-3">
+            <div
+                class="
+                    d-flex
+                    align-items-center
+                    gap-3
+                "
+            >
 
                 <div
                     class="training-stat-icon"
@@ -728,18 +1230,36 @@ if ($qStat) {
                     "
                 >
 
-                    <i class="bi bi-calendar-event"></i>
+                    <i
+                        class="
+                            bi
+                            bi-calendar-event
+                        "
+                    ></i>
 
                 </div>
 
+
                 <div>
 
-                    <div class="small text-muted">
+                    <div
+                        class="
+                            small
+                            text-muted
+                        "
+                    >
                         Total Training
                     </div>
 
-                    <div class="fs-4 fw-bold">
-                        <?= number_format($total_training) ?>
+                    <div
+                        class="
+                            fs-4
+                            fw-bold
+                        "
+                    >
+                        <?= number_format(
+                            $total_training
+                        ) ?>
                     </div>
 
                 </div>
@@ -751,11 +1271,19 @@ if ($qStat) {
     </div>
 
 
+    <!-- TERJADWAL -->
+
     <div class="col-xl-3 col-md-6">
 
-        <div class="training-stat h-100">
+        <div class="training-stat">
 
-            <div class="d-flex align-items-center gap-3">
+            <div
+                class="
+                    d-flex
+                    align-items-center
+                    gap-3
+                "
+            >
 
                 <div
                     class="training-stat-icon"
@@ -765,18 +1293,36 @@ if ($qStat) {
                     "
                 >
 
-                    <i class="bi bi-clock"></i>
+                    <i
+                        class="
+                            bi
+                            bi-clock
+                        "
+                    ></i>
 
                 </div>
 
+
                 <div>
 
-                    <div class="small text-muted">
+                    <div
+                        class="
+                            small
+                            text-muted
+                        "
+                    >
                         Terjadwal
                     </div>
 
-                    <div class="fs-4 fw-bold">
-                        <?= number_format($terjadwal) ?>
+                    <div
+                        class="
+                            fs-4
+                            fw-bold
+                        "
+                    >
+                        <?= number_format(
+                            $terjadwal
+                        ) ?>
                     </div>
 
                 </div>
@@ -788,11 +1334,19 @@ if ($qStat) {
     </div>
 
 
+    <!-- BERLANGSUNG -->
+
     <div class="col-xl-3 col-md-6">
 
-        <div class="training-stat h-100">
+        <div class="training-stat">
 
-            <div class="d-flex align-items-center gap-3">
+            <div
+                class="
+                    d-flex
+                    align-items-center
+                    gap-3
+                "
+            >
 
                 <div
                     class="training-stat-icon"
@@ -802,18 +1356,36 @@ if ($qStat) {
                     "
                 >
 
-                    <i class="bi bi-play-circle"></i>
+                    <i
+                        class="
+                            bi
+                            bi-play-circle
+                        "
+                    ></i>
 
                 </div>
 
+
                 <div>
 
-                    <div class="small text-muted">
+                    <div
+                        class="
+                            small
+                            text-muted
+                        "
+                    >
                         Berlangsung
                     </div>
 
-                    <div class="fs-4 fw-bold">
-                        <?= number_format($berlangsung) ?>
+                    <div
+                        class="
+                            fs-4
+                            fw-bold
+                        "
+                    >
+                        <?= number_format(
+                            $berlangsung
+                        ) ?>
                     </div>
 
                 </div>
@@ -825,11 +1397,19 @@ if ($qStat) {
     </div>
 
 
+    <!-- SELESAI -->
+
     <div class="col-xl-3 col-md-6">
 
-        <div class="training-stat h-100">
+        <div class="training-stat">
 
-            <div class="d-flex align-items-center gap-3">
+            <div
+                class="
+                    d-flex
+                    align-items-center
+                    gap-3
+                "
+            >
 
                 <div
                     class="training-stat-icon"
@@ -839,18 +1419,36 @@ if ($qStat) {
                     "
                 >
 
-                    <i class="bi bi-check-circle"></i>
+                    <i
+                        class="
+                            bi
+                            bi-check-circle
+                        "
+                    ></i>
 
                 </div>
 
+
                 <div>
 
-                    <div class="small text-muted">
+                    <div
+                        class="
+                            small
+                            text-muted
+                        "
+                    >
                         Selesai
                     </div>
 
-                    <div class="fs-4 fw-bold">
-                        <?= number_format($selesai) ?>
+                    <div
+                        class="
+                            fs-4
+                            fw-bold
+                        "
+                    >
+                        <?= number_format(
+                            $selesai
+                        ) ?>
                     </div>
 
                 </div>
@@ -865,34 +1463,80 @@ if ($qStat) {
 
 
 <!-- =======================================================
-     HEADER
+     HEADER + FILTER
 ======================================================= -->
 
-<div class="cardx mb-4">
+<div class="training-page-card mb-4 p-4">
 
-    <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+
+    <!-- HEADER -->
+
+    <div
+        class="
+            d-flex
+            justify-content-between
+            align-items-center
+            flex-wrap
+            gap-3
+        "
+    >
 
         <div>
 
-            <div class="card-title mb-1">
+            <div
+                class="
+                    fw-bold
+                    mb-1
+                "
+                style="
+                    color:#172033;
+                    font-size:15px;
+                "
+            >
+
+                <i
+                    class="
+                        bi
+                        bi-calendar2-week
+                        me-1
+                    "
+                ></i>
+
                 Jadwal Training
+
             </div>
 
-            <div class="section-note">
-                Kelola training berdasarkan kebutuhan kompetensi dan jabatan pekerja.
+
+            <div
+                style="
+                    color:#8a94a4;
+                    font-size:11px;
+                "
+            >
+
+                Kelola jadwal training berdasarkan
+                kebutuhan kompetensi dan jabatan pekerja.
+
             </div>
 
         </div>
 
 
         <button
+            type="button"
             class="btn btn-primary"
             data-bs-toggle="modal"
             data-bs-target="#modalTraining"
             onclick="prepareAdd()"
         >
 
-            <i class="bi bi-plus-lg me-1"></i>
+            <i
+                class="
+                    bi
+                    bi-plus-lg
+                    me-1
+                "
+            ></i>
 
             Tambah Training
 
@@ -905,166 +1549,241 @@ if ($qStat) {
          FILTER
     ====================================================== -->
 
-    <form
-        method="get"
-        class="row g-3 mt-2 align-items-end"
-    >
+    <div class="training-filter mt-4">
 
-        <div class="col-xl-4 col-lg-4 col-md-6">
+        <form
+            method="get"
+            class="row g-3 align-items-end"
+        >
 
-            <label class="form-label">
-                Cari Training
-            </label>
 
-            <div class="input-group">
+            <!-- SEARCH -->
 
-                <span class="input-group-text bg-white">
-                    <i class="bi bi-search"></i>
-                </span>
+            <div
+                class="
+                    col-xl-5
+                    col-lg-5
+                    col-md-6
+                "
+            >
 
-                <input
-                    type="text"
-                    name="q"
-                    class="form-control"
-                    value="<?= e($keyword) ?>"
-                    placeholder="Nama training, skill, trainer..."
-                >
+                <label class="form-label">
+
+                    Cari Training
+
+                </label>
+
+
+                <div class="input-group">
+
+                    <span
+                        class="
+                            input-group-text
+                            bg-white
+                        "
+                    >
+
+                        <i
+                            class="
+                                bi
+                                bi-search
+                            "
+                        ></i>
+
+                    </span>
+
+
+                    <input
+                        type="text"
+                        name="q"
+                        class="form-control"
+                        value="<?= e($keyword) ?>"
+                        placeholder="
+                            Nama training, skill, trainer,
+                            lokasi...
+                        "
+                    >
+
+                </div>
 
             </div>
 
-        </div>
 
+            <!-- JABATAN -->
 
-        <div class="col-xl-3 col-lg-3 col-md-6">
-
-            <label class="form-label">
-                Jabatan
-            </label>
-
-            <select
-                name="jabatan"
-                class="form-select"
+            <div
+                class="
+                    col-xl-3
+                    col-lg-3
+                    col-md-6
+                "
             >
 
-                <option value="0">
-                    Semua Jabatan
-                </option>
+                <label class="form-label">
 
-                <?php foreach ($jabatan as $j): ?>
+                    Jabatan Target
 
-                    <option
-                        value="<?= (int) $j['id'] ?>"
-                        <?= $filter_jabatan == $j['id']
-                            ? 'selected'
-                            : ''
-                        ?>
-                    >
+                </label>
 
-                        <?= e($j['nama_jabatan']) ?>
+
+                <select
+                    name="jabatan"
+                    class="form-select"
+                >
+
+                    <option value="0">
+
+                        Semua Jabatan
 
                     </option>
 
-                <?php endforeach; ?>
 
-            </select>
+                    <?php foreach (
+                        $jabatan
+                        as $j
+                    ): ?>
 
-        </div>
+                        <option
+                            value="<?= (int) $j['id'] ?>"
+                            <?= (
+                                $filter_jabatan
+                                === (int)$j['id']
+                            )
+                                ? 'selected'
+                                : ''
+                            ?>
+                        >
 
+                            <?= e(
+                                $j['nama_jabatan']
+                            ) ?>
 
-        <div class="col-xl-3 col-lg-3 col-md-6">
+                        </option>
 
-            <label class="form-label">
-                Status
-            </label>
+                    <?php endforeach; ?>
 
-            <select
-                name="status"
-                class="form-select"
-            >
-
-                <option value="">
-                    Semua Status
-                </option>
-
-                <option
-                    value="Terjadwal"
-                    <?= $filter_status === 'Terjadwal'
-                        ? 'selected'
-                        : ''
-                    ?>
-                >
-                    Terjadwal
-                </option>
-
-                <option
-                    value="Berlangsung"
-                    <?= $filter_status === 'Berlangsung'
-                        ? 'selected'
-                        : ''
-                    ?>
-                >
-                    Berlangsung
-                </option>
-
-                <option
-                    value="Selesai"
-                    <?= $filter_status === 'Selesai'
-                        ? 'selected'
-                        : ''
-                    ?>
-                >
-                    Selesai
-                </option>
-
-                <option
-                    value="Terlambat"
-                    <?= $filter_status === 'Terlambat'
-                        ? 'selected'
-                        : ''
-                    ?>
-                >
-                    Terlambat
-                </option>
-
-                <option
-                    value="Dibatalkan"
-                    <?= $filter_status === 'Dibatalkan'
-                        ? 'selected'
-                        : ''
-                    ?>
-                >
-                    Dibatalkan
-                </option>
-
-            </select>
-
-        </div>
-
-
-        <div class="col-xl-2 col-lg-2 col-md-6">
-
-            <div class="d-flex gap-2">
-
-                <button class="btn btn-primary">
-
-                    <i class="bi bi-search"></i>
-
-                </button>
-
-                <a
-                    href="index.php"
-                    class="btn btn-light border"
-                >
-
-                    <i class="bi bi-arrow-counterclockwise"></i>
-
-                </a>
+                </select>
 
             </div>
 
-        </div>
 
-    </form>
+            <!-- STATUS -->
+
+            <div
+                class="
+                    col-xl-2
+                    col-lg-2
+                    col-md-6
+                "
+            >
+
+                <label class="form-label">
+
+                    Status
+
+                </label>
+
+
+                <select
+                    name="status"
+                    class="form-select"
+                >
+
+                    <option value="">
+
+                        Semua Status
+
+                    </option>
+
+
+                    <?php foreach (
+                        $valid_status
+                        as $st
+                    ): ?>
+
+                        <option
+                            value="<?= e($st) ?>"
+                            <?= $filter_status === $st
+                                ? 'selected'
+                                : ''
+                            ?>
+                        >
+
+                            <?= e($st) ?>
+
+                        </option>
+
+                    <?php endforeach; ?>
+
+                </select>
+
+            </div>
+
+
+            <!-- BUTTON -->
+
+            <div
+                class="
+                    col-xl-2
+                    col-lg-2
+                    col-md-6
+                "
+            >
+
+                <div
+                    class="
+                        d-flex
+                        gap-2
+                    "
+                >
+
+                    <button
+                        type="submit"
+                        class="
+                            btn
+                            btn-primary
+                            flex-grow-1
+                        "
+                    >
+
+                        <i
+                            class="
+                                bi
+                                bi-search
+                            "
+                        ></i>
+
+                        Cari
+
+                    </button>
+
+
+                    <a
+                        href="index.php"
+                        class="
+                            btn
+                            btn-light
+                            border
+                        "
+                        title="Reset Filter"
+                    >
+
+                        <i
+                            class="
+                                bi
+                                bi-arrow-counterclockwise
+                            "
+                        ></i>
+
+                    </a>
+
+                </div>
+
+            </div>
+
+        </form>
+
+    </div>
 
 </div>
 
@@ -1073,42 +1792,97 @@ if ($qStat) {
      TABLE
 ======================================================= -->
 
-<div class="cardx">
+<div class="training-page-card p-4">
 
-    <div class="d-flex justify-content-between align-items-center mb-3">
+
+    <!-- TABLE HEADER -->
+
+    <div
+        class="
+            d-flex
+            justify-content-between
+            align-items-center
+            mb-3
+            flex-wrap
+            gap-2
+        "
+    >
 
         <div>
 
-            <div class="card-title mb-1">
+            <div
+                class="
+                    fw-bold
+                    mb-1
+                "
+                style="
+                    color:#172033;
+                    font-size:14px;
+                "
+            >
+
                 Daftar Jadwal Training
+
             </div>
 
-            <div class="section-note">
-                Training dipisahkan berdasarkan jabatan target.
+
+            <div
+                style="
+                    color:#8a94a4;
+                    font-size:11px;
+                "
+            >
+
+                Menampilkan jadwal berdasarkan
+                filter yang dipilih.
+
             </div>
 
         </div>
 
-        <span class="badge-status status-good">
 
-            <i class="bi bi-calendar-check me-1"></i>
+        <span
+            class="
+                status-training
+                status-terjadwal
+            "
+        >
 
-            <?= number_format($rows->num_rows) ?> Jadwal
+            <i
+                class="
+                    bi
+                    bi-calendar-check
+                "
+            ></i>
+
+            <?= number_format(
+                count($training_rows)
+            ) ?>
+
+            Jadwal
 
         </span>
 
     </div>
 
 
+    <!-- TABLE -->
+
     <div class="table-responsive">
 
-        <table class="table table-hover training-table">
+        <table
+            class="
+                table
+                table-hover
+                training-table
+            "
+        >
 
             <thead>
 
                 <tr>
 
-                    <th width="50">
+                    <th width="45">
                         No
                     </th>
 
@@ -1140,7 +1914,7 @@ if ($qStat) {
                         Status
                     </th>
 
-                    <th width="100">
+                    <th width="95">
                         Aksi
                     </th>
 
@@ -1151,50 +1925,32 @@ if ($qStat) {
 
             <tbody>
 
-            <?php if ($rows->num_rows > 0): ?>
+
+            <?php if (
+                !empty($training_rows)
+            ): ?>
+
 
                 <?php
 
                 $no = 1;
 
-                while ($r = $rows->fetch_assoc()):
+                foreach (
+                    $training_rows
+                    as $r
+                ):
 
                     $jabatanNama =
-                        $r['nama_jabatan']
-                        ?: 'Semua Jabatan';
-
-
-                    /*
-                     * Bedakan tampilan Leader dan Pelaksana.
-                     */
-
-                    $jabatanLower =
-                        strtolower(
-                            $jabatanNama
-                        );
+                        !empty(
+                            $r['nama_jabatan']
+                        )
+                            ? $r['nama_jabatan']
+                            : 'Semua Jabatan';
 
 
                     $isLeader =
-                        (
-                            strpos(
-                                $jabatanLower,
-                                'leader'
-                            ) !== false
-                            ||
-                            strpos(
-                                $jabatanLower,
-                                'supervisor'
-                            ) !== false
-                            ||
-                            strpos(
-                                $jabatanLower,
-                                'koordinator'
-                            ) !== false
-                            ||
-                            strpos(
-                                $jabatanLower,
-                                'kepala'
-                            ) !== false
+                        isLeaderJabatan(
+                            $jabatanNama
                         );
 
 
@@ -1204,40 +1960,116 @@ if ($qStat) {
                             : 'jabatan-pelaksana';
 
 
+                    $statusClass =
+                        trainingStatusClass(
+                            $r['status']
+                        );
+
+
+                    $statusIcon =
+                        trainingStatusIcon(
+                            $r['status']
+                        );
+
+
                     /*
-                     * Status class
+                     * Data untuk tombol EDIT.
+                     *
+                     * Data disimpan dalam data-* attribute.
+                     * Ini menghindari masalah syntax/quote pada
+                     * onclick json_encode.
                      */
 
-                    $statusClass =
-                        'status-' .
-                        strtolower(
-                            $r['status']
+                    $editData = [
+                        'id' =>
+                            (int)$r['id'],
+
+                        'nama_training' =>
+                            $r['nama_training'] ?? '',
+
+                        'id_skill' =>
+                            (int)($r['id_skill'] ?? 0),
+
+                        'id_jabatan' =>
+                            (int)($r['id_jabatan'] ?? 0),
+
+                        'trainer' =>
+                            $r['trainer'] ?? '',
+
+                        'tanggal_mulai' =>
+                            $r['tanggal_mulai'] ?? '',
+
+                        'tanggal_selesai' =>
+                            $r['tanggal_selesai'] ?? '',
+
+                        'lokasi' =>
+                            $r['lokasi'] ?? '',
+
+                        'status' =>
+                            $r['status'] ?? 'Terjadwal',
+
+                        'catatan' =>
+                            $r['catatan'] ?? ''
+                    ];
+
+
+                    $editJson =
+                        json_encode(
+                            $editData,
+                            JSON_UNESCAPED_UNICODE |
+                            JSON_HEX_TAG |
+                            JSON_HEX_APOS |
+                            JSON_HEX_QUOT |
+                            JSON_HEX_AMP
                         );
 
                 ?>
 
+
                     <tr>
 
+
+                        <!-- NO -->
+
                         <td>
+
                             <?= $no++ ?>
+
                         </td>
 
+
+                        <!-- TRAINING -->
 
                         <td>
 
                             <div class="training-name">
-                                <?= e($r['nama_training']) ?>
+
+                                <?= e(
+                                    $r['nama_training']
+                                ) ?>
+
                             </div>
 
-                            <?php if (!empty($r['catatan'])): ?>
 
-                                <div class="small text-muted mt-1">
+                            <?php if (
+                                !empty(
+                                    $r['catatan']
+                                )
+                            ): ?>
+
+                                <div
+                                    class="
+                                        small
+                                        text-muted
+                                        mt-1
+                                    "
+                                >
 
                                     <?= e(
                                         mb_strimwidth(
                                             $r['catatan'],
                                             0,
-                                            70,
+                                            65,
                                             '...'
                                         )
                                     ) ?>
@@ -1254,18 +2086,27 @@ if ($qStat) {
                         <td>
 
                             <span
-                                class="jabatan-badge <?= $jabatanClass ?>"
+                                class="
+                                    jabatan-badge
+                                    <?= e(
+                                        $jabatanClass
+                                    ) ?>
+                                "
                             >
 
                                 <i
-                                    class="bi
-                                    <?= $isLeader
-                                        ? 'bi-person-badge-fill'
-                                        : 'bi-person-fill'
-                                    ?>"
+                                    class="
+                                        bi
+                                        <?= $isLeader
+                                            ? 'bi-person-badge-fill'
+                                            : 'bi-person-fill'
+                                        ?>
+                                    "
                                 ></i>
 
-                                <?= e($jabatanNama) ?>
+                                <?= e(
+                                    $jabatanNama
+                                ) ?>
 
                             </span>
 
@@ -1276,10 +2117,35 @@ if ($qStat) {
 
                         <td>
 
-                            <?= e(
-                                $r['nama_skill']
-                                ?: 'Umum'
-                            ) ?>
+                            <?php if (
+                                !empty(
+                                    $r['nama_skill']
+                                )
+                            ): ?>
+
+                                <span
+                                    style="
+                                        color:#39465a;
+                                    "
+                                >
+
+                                    <?= e(
+                                        $r['nama_skill']
+                                    ) ?>
+
+                                </span>
+
+                            <?php else: ?>
+
+                                <span
+                                    class="text-muted"
+                                >
+
+                                    Umum
+
+                                </span>
+
+                            <?php endif; ?>
 
                         </td>
 
@@ -1288,10 +2154,14 @@ if ($qStat) {
 
                         <td>
 
-                            <?= e(
+                            <?= !empty(
                                 $r['trainer']
-                                ?: '-'
-                            ) ?>
+                            )
+                                ? e(
+                                    $r['trainer']
+                                )
+                                : '-'
+                            ?>
 
                         </td>
 
@@ -1300,9 +2170,22 @@ if ($qStat) {
 
                         <td>
 
-                            <?php if (!empty($r['tanggal_mulai'])): ?>
+                            <?php if (
+                                !empty(
+                                    $r['tanggal_mulai']
+                                )
+                            ): ?>
 
                                 <div>
+
+                                    <i
+                                        class="
+                                            bi
+                                            bi-calendar3
+                                            me-1
+                                        "
+                                    ></i>
+
                                     <?= e(
                                         date(
                                             'd/m/Y',
@@ -1311,6 +2194,7 @@ if ($qStat) {
                                             )
                                         )
                                     ) ?>
+
                                 </div>
 
                             <?php else: ?>
@@ -1320,9 +2204,19 @@ if ($qStat) {
                             <?php endif; ?>
 
 
-                            <?php if (!empty($r['tanggal_selesai'])): ?>
+                            <?php if (
+                                !empty(
+                                    $r['tanggal_selesai']
+                                )
+                            ): ?>
 
-                                <div class="small text-muted">
+                                <div
+                                    class="
+                                        small
+                                        text-muted
+                                        mt-1
+                                    "
+                                >
 
                                     s/d
 
@@ -1346,10 +2240,14 @@ if ($qStat) {
 
                         <td>
 
-                            <?= e(
+                            <?= !empty(
                                 $r['lokasi']
-                                ?: '-'
-                            ) ?>
+                            )
+                                ? e(
+                                    $r['lokasi']
+                                )
+                                : '-'
+                            ?>
 
                         </td>
 
@@ -1359,40 +2257,21 @@ if ($qStat) {
                         <td>
 
                             <span
-                                class="status-training <?= $statusClass ?>"
+                                class="
+                                    status-training
+                                    <?= e(
+                                        $statusClass
+                                    ) ?>
+                                "
                             >
 
-                                <?php
-
-                                $icons = [
-
-                                    'Terjadwal'
-                                        => 'bi-clock',
-
-                                    'Berlangsung'
-                                        => 'bi-play-circle',
-
-                                    'Selesai'
-                                        => 'bi-check-circle',
-
-                                    'Terlambat'
-                                        => 'bi-exclamation-circle',
-
-                                    'Dibatalkan'
-                                        => 'bi-x-circle'
-
-                                ];
-
-                                $icon =
-                                    $icons[
-                                        $r['status']
-                                    ]
-                                    ?? 'bi-info-circle';
-
-                                ?>
-
                                 <i
-                                    class="bi <?= $icon ?>"
+                                    class="
+                                        bi
+                                        <?= e(
+                                            $statusIcon
+                                        ) ?>
+                                    "
                                 ></i>
 
                                 <?= e(
@@ -1408,32 +2287,52 @@ if ($qStat) {
 
                         <td>
 
-                            <div class="d-flex gap-1">
+                            <div
+                                class="
+                                    d-flex
+                                    gap-1
+                                "
+                            >
+
+
+                                <!-- EDIT -->
 
                                 <button
                                     type="button"
-                                    class="btn btn-sm btn-outline-primary"
+                                    class="
+                                        btn
+                                        btn-sm
+                                        btn-outline-primary
+                                    "
                                     title="Edit"
                                     data-bs-toggle="modal"
                                     data-bs-target="#modalTraining"
-                                    onclick='prepareEdit(<?= json_encode(
-                                        $r,
-                                        JSON_HEX_TAG |
-                                        JSON_HEX_APOS |
-                                        JSON_HEX_QUOT |
-                                        JSON_HEX_AMP
-                                    ) ?>)'
+                                    data-training="<?= e(
+                                        $editJson
+                                    ) ?>"
+                                    onclick="prepareEditFromButton(this)"
                                 >
 
-                                    <i class="bi bi-pencil"></i>
+                                    <i
+                                        class="
+                                            bi
+                                            bi-pencil
+                                        "
+                                    ></i>
 
                                 </button>
 
 
+                                <!-- DELETE -->
+
                                 <form
                                     method="post"
                                     class="d-inline"
-                                    onsubmit="return confirmDelete('<?= e($r['nama_training']) ?>')"
+                                    onsubmit="
+                                        return confirmDelete(
+                                            this
+                                        );
+                                    "
                                 >
 
                                     <input
@@ -1442,58 +2341,103 @@ if ($qStat) {
                                         value="delete"
                                     >
 
+
                                     <input
                                         type="hidden"
                                         name="id"
-                                        value="<?= (int) $r['id'] ?>"
+                                        value="<?= (int)$r['id'] ?>"
                                     >
+
 
                                     <button
                                         type="submit"
-                                        class="btn btn-sm btn-outline-danger"
+                                        class="
+                                            btn
+                                            btn-sm
+                                            btn-outline-danger
+                                        "
                                         title="Hapus"
                                     >
 
-                                        <i class="bi bi-trash"></i>
+                                        <i
+                                            class="
+                                                bi
+                                                bi-trash
+                                            "
+                                        ></i>
 
                                     </button>
 
                                 </form>
 
+
                             </div>
 
                         </td>
 
+
                     </tr>
 
-                <?php endwhile; ?>
+
+                <?php endforeach; ?>
+
 
             <?php else: ?>
+
 
                 <tr>
 
                     <td
                         colspan="9"
-                        class="text-center py-5"
+                        class="
+                            text-center
+                            py-5
+                        "
                     >
 
                         <i
-                            class="bi bi-calendar-x fs-1 text-muted d-block mb-3"
+                            class="
+                                bi
+                                bi-calendar-x
+                                fs-1
+                                text-muted
+                                d-block
+                                mb-3
+                            "
                         ></i>
 
-                        <div class="fw-semibold">
-                            Belum ada jadwal training
+
+                        <div
+                            class="
+                                fw-semibold
+                                mb-1
+                            "
+                        >
+
+                            Tidak ada jadwal training
+
                         </div>
 
-                        <div class="small text-muted">
-                            Silakan tambahkan jadwal training baru.
+
+                        <div
+                            class="
+                                small
+                                text-muted
+                            "
+                        >
+
+                            Belum ada data yang sesuai
+                            dengan filter.
+
                         </div>
 
                     </td>
 
                 </tr>
 
+
             <?php endif; ?>
+
 
             </tbody>
 
@@ -1509,24 +2453,43 @@ if ($qStat) {
 ======================================================= -->
 
 <div
-    class="modal fade"
+    class="
+        modal
+        fade
+    "
     id="modalTraining"
     tabindex="-1"
     aria-hidden="true"
 >
 
-    <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div
+        class="
+            modal-dialog
+            modal-lg
+            modal-dialog-centered
+        "
+    >
 
         <form
             method="post"
-            class="modal-content border-0 shadow-lg"
+            class="
+                modal-content
+                border-0
+                shadow-lg
+            "
         >
+
+
+            <!-- ACTION -->
 
             <input
                 type="hidden"
                 name="action"
                 value="save"
             >
+
+
+            <!-- ID -->
 
             <input
                 type="hidden"
@@ -1536,19 +2499,35 @@ if ($qStat) {
             >
 
 
+            <!-- HEADER -->
+
             <div class="modal-header">
 
                 <div>
 
                     <h5
-                        class="modal-title fw-bold"
+                        class="
+                            modal-title
+                            fw-bold
+                        "
                         id="modalTitle"
                     >
+
                         Tambah Jadwal Training
+
                     </h5>
 
-                    <div class="small text-muted">
-                        Tentukan training berdasarkan jabatan dan kompetensi.
+
+                    <div
+                        class="
+                            small
+                            text-muted
+                        "
+                    >
+
+                        Tentukan training berdasarkan
+                        jabatan dan kompetensi.
+
                     </div>
 
                 </div>
@@ -1563,19 +2542,29 @@ if ($qStat) {
             </div>
 
 
+            <!-- BODY -->
+
             <div class="modal-body">
 
                 <div class="row g-3">
 
 
-                    <!-- NAMA -->
+                    <!-- NAMA TRAINING -->
 
                     <div class="col-md-7">
 
                         <label class="form-label">
+
                             Nama Training
-                            <span class="text-danger">*</span>
+
+                            <span
+                                class="text-danger"
+                            >
+                                *
+                            </span>
+
                         </label>
+
 
                         <input
                             type="text"
@@ -1583,7 +2572,11 @@ if ($qStat) {
                             id="form_nama"
                             class="form-control"
                             required
-                            placeholder="Contoh: Basic Electrical"
+                            maxlength="255"
+                            placeholder="
+                                Contoh:
+                                Basic Electrical
+                            "
                         >
 
                     </div>
@@ -1597,9 +2590,14 @@ if ($qStat) {
 
                             Jabatan Target
 
-                            <span class="text-danger">*</span>
+                            <span
+                                class="text-danger"
+                            >
+                                *
+                            </span>
 
                         </label>
+
 
                         <select
                             name="id_jabatan"
@@ -1609,13 +2607,19 @@ if ($qStat) {
                         >
 
                             <option value="">
+
                                 -- Pilih Jabatan --
+
                             </option>
 
-                            <?php foreach ($jabatan as $j): ?>
+
+                            <?php foreach (
+                                $jabatan
+                                as $j
+                            ): ?>
 
                                 <option
-                                    value="<?= (int) $j['id'] ?>"
+                                    value="<?= (int)$j['id'] ?>"
                                 >
 
                                     <?= e(
@@ -1628,14 +2632,6 @@ if ($qStat) {
 
                         </select>
 
-
-                        <div class="form-text">
-
-                            Training akan ditandai khusus
-                            untuk jabatan ini.
-
-                        </div>
-
                     </div>
 
 
@@ -1644,8 +2640,11 @@ if ($qStat) {
                     <div class="col-md-6">
 
                         <label class="form-label">
+
                             Skill / Kompetensi
+
                         </label>
+
 
                         <select
                             name="id_skill"
@@ -1654,13 +2653,19 @@ if ($qStat) {
                         >
 
                             <option value="0">
+
                                 Umum
+
                             </option>
 
-                            <?php foreach ($skills as $s): ?>
+
+                            <?php foreach (
+                                $skills
+                                as $s
+                            ): ?>
 
                                 <option
-                                    value="<?= (int) $s['id'] ?>"
+                                    value="<?= (int)$s['id'] ?>"
                                 >
 
                                     <?= e(
@@ -1681,27 +2686,36 @@ if ($qStat) {
                     <div class="col-md-6">
 
                         <label class="form-label">
+
                             Trainer
+
                         </label>
+
 
                         <input
                             type="text"
                             name="trainer"
                             id="form_trainer"
                             class="form-control"
-                            placeholder="Nama trainer"
+                            maxlength="255"
+                            placeholder="
+                                Nama trainer
+                            "
                         >
 
                     </div>
 
 
-                    <!-- TANGGAL MULAI -->
+                    <!-- MULAI -->
 
                     <div class="col-md-4">
 
                         <label class="form-label">
+
                             Tanggal Mulai
+
                         </label>
+
 
                         <input
                             type="date"
@@ -1713,13 +2727,16 @@ if ($qStat) {
                     </div>
 
 
-                    <!-- TANGGAL SELESAI -->
+                    <!-- SELESAI -->
 
                     <div class="col-md-4">
 
                         <label class="form-label">
+
                             Tanggal Selesai
+
                         </label>
+
 
                         <input
                             type="date"
@@ -1736,8 +2753,11 @@ if ($qStat) {
                     <div class="col-md-4">
 
                         <label class="form-label">
+
                             Status
+
                         </label>
+
 
                         <select
                             name="status"
@@ -1745,25 +2765,20 @@ if ($qStat) {
                             class="form-select"
                         >
 
-                            <option value="Terjadwal">
-                                Terjadwal
-                            </option>
+                            <?php foreach (
+                                $valid_status
+                                as $st
+                            ): ?>
 
-                            <option value="Berlangsung">
-                                Berlangsung
-                            </option>
+                                <option
+                                    value="<?= e($st) ?>"
+                                >
 
-                            <option value="Selesai">
-                                Selesai
-                            </option>
+                                    <?= e($st) ?>
 
-                            <option value="Terlambat">
-                                Terlambat
-                            </option>
+                                </option>
 
-                            <option value="Dibatalkan">
-                                Dibatalkan
-                            </option>
+                            <?php endforeach; ?>
 
                         </select>
 
@@ -1775,15 +2790,22 @@ if ($qStat) {
                     <div class="col-12">
 
                         <label class="form-label">
+
                             Lokasi
+
                         </label>
+
 
                         <input
                             type="text"
                             name="lokasi"
                             id="form_lokasi"
                             class="form-control"
-                            placeholder="Contoh: Training Room Teknik"
+                            maxlength="255"
+                            placeholder="
+                                Contoh:
+                                Training Room Teknik
+                            "
                         >
 
                     </div>
@@ -1794,47 +2816,71 @@ if ($qStat) {
                     <div class="col-12">
 
                         <label class="form-label">
+
                             Catatan
+
                         </label>
+
 
                         <textarea
                             name="catatan"
                             id="form_catatan"
                             class="form-control"
                             rows="3"
-                            placeholder="Catatan training..."
+                            placeholder="
+                                Catatan training...
+                            "
                         ></textarea>
 
                     </div>
+
 
                 </div>
 
             </div>
 
 
+            <!-- FOOTER -->
+
             <div class="modal-footer">
 
                 <button
                     type="button"
-                    class="btn btn-light border"
+                    class="
+                        btn
+                        btn-light
+                        border
+                    "
                     data-bs-dismiss="modal"
                 >
+
                     Batal
+
                 </button>
 
 
                 <button
                     type="submit"
-                    class="btn btn-primary"
+                    class="
+                        btn
+                        btn-primary
+                    "
                 >
 
-                    <i class="bi bi-save me-1"></i>
+                    <i
+                        class="
+                            bi
+                            bi-save
+                            me-1
+                        "
+                    ></i>
 
                     Simpan Jadwal
 
                 </button>
 
             </div>
+
 
         </form>
 
@@ -1843,87 +2889,232 @@ if ($qStat) {
 </div>
 
 
+<!-- =======================================================
+     JAVASCRIPT
+======================================================= -->
+
 <script>
 
 /* =========================================================
-   TAMBAH
+   TAMBAH DATA
 ========================================================= */
 
 function prepareAdd() {
 
-    document.getElementById('modalTitle').innerText =
+    const title =
+        document.getElementById(
+            'modalTitle'
+        );
+
+    const id =
+        document.getElementById(
+            'form_id'
+        );
+
+    const nama =
+        document.getElementById(
+            'form_nama'
+        );
+
+    const jabatan =
+        document.getElementById(
+            'form_jabatan'
+        );
+
+    const skill =
+        document.getElementById(
+            'form_skill'
+        );
+
+    const trainer =
+        document.getElementById(
+            'form_trainer'
+        );
+
+    const mulai =
+        document.getElementById(
+            'form_mulai'
+        );
+
+    const selesai =
+        document.getElementById(
+            'form_selesai'
+        );
+
+    const lokasi =
+        document.getElementById(
+            'form_lokasi'
+        );
+
+    const status =
+        document.getElementById(
+            'form_status'
+        );
+
+    const catatan =
+        document.getElementById(
+            'form_catatan'
+        );
+
+
+    title.innerText =
         'Tambah Jadwal Training';
 
-    document.getElementById('form_id').value =
+
+    id.value =
         '0';
 
-    document.getElementById('form_nama').value =
+
+    nama.value =
         '';
 
-    document.getElementById('form_jabatan').value =
+
+    jabatan.value =
         '';
 
-    document.getElementById('form_skill').value =
+
+    skill.value =
         '0';
 
-    document.getElementById('form_trainer').value =
+
+    trainer.value =
         '';
 
-    document.getElementById('form_mulai').value =
+
+    mulai.value =
         '';
 
-    document.getElementById('form_selesai').value =
+
+    selesai.value =
         '';
 
-    document.getElementById('form_lokasi').value =
+
+    lokasi.value =
         '';
 
-    document.getElementById('form_status').value =
+
+    status.value =
         'Terjadwal';
 
-    document.getElementById('form_catatan').value =
+
+    catatan.value =
         '';
+
 }
 
 
 /* =========================================================
-   EDIT
+   EDIT DATA
 ========================================================= */
 
-function prepareEdit(data) {
+function prepareEditFromButton(button) {
 
-    document.getElementById('modalTitle').innerText =
+    const raw =
+        button.getAttribute(
+            'data-training'
+        );
+
+
+    if (!raw) {
+
+        console.error(
+            'Data training tidak ditemukan.'
+        );
+
+        return;
+
+    }
+
+
+    let data;
+
+
+    try {
+
+        data =
+            JSON.parse(raw);
+
+    } catch (error) {
+
+        console.error(
+            'Data training tidak valid:',
+            error
+        );
+
+        alert(
+            'Data training tidak dapat dibaca.'
+        );
+
+        return;
+
+    }
+
+
+    document.getElementById(
+        'modalTitle'
+    ).innerText =
         'Edit Jadwal Training';
 
-    document.getElementById('form_id').value =
+
+    document.getElementById(
+        'form_id'
+    ).value =
         data.id || 0;
 
-    document.getElementById('form_nama').value =
+
+    document.getElementById(
+        'form_nama'
+    ).value =
         data.nama_training || '';
 
-    document.getElementById('form_jabatan').value =
+
+    document.getElementById(
+        'form_jabatan'
+    ).value =
         data.id_jabatan || '';
 
-    document.getElementById('form_skill').value =
+
+    document.getElementById(
+        'form_skill'
+    ).value =
         data.id_skill || 0;
 
-    document.getElementById('form_trainer').value =
+
+    document.getElementById(
+        'form_trainer'
+    ).value =
         data.trainer || '';
 
-    document.getElementById('form_mulai').value =
+
+    document.getElementById(
+        'form_mulai'
+    ).value =
         data.tanggal_mulai || '';
 
-    document.getElementById('form_selesai').value =
+
+    document.getElementById(
+        'form_selesai'
+    ).value =
         data.tanggal_selesai || '';
 
-    document.getElementById('form_lokasi').value =
+
+    document.getElementById(
+        'form_lokasi'
+    ).value =
         data.lokasi || '';
 
-    document.getElementById('form_status').value =
+
+    document.getElementById(
+        'form_status'
+    ).value =
         data.status || 'Terjadwal';
 
-    document.getElementById('form_catatan').value =
+
+    document.getElementById(
+        'form_catatan'
+    ).value =
         data.catatan || '';
+
 }
 
 
@@ -1931,10 +3122,52 @@ function prepareEdit(data) {
    DELETE
 ========================================================= */
 
-function confirmDelete(nama) {
+function confirmDelete(form) {
+
+    const id =
+        form.querySelector(
+            'input[name="id"]'
+        );
+
+
+    const button =
+        form.querySelector(
+            'button[type="submit"]'
+        );
+
+
+    const row =
+        button
+            ? button.closest('tr')
+            : null;
+
+
+    let nama =
+        'jadwal training';
+
+
+    if (row) {
+
+        const nameElement =
+            row.querySelector(
+                '.training-name'
+            );
+
+
+        if (nameElement) {
+
+            nama =
+                nameElement
+                    .textContent
+                    .trim();
+
+        }
+
+    }
+
 
     return confirm(
-        'Hapus jadwal training "' +
+        'Apakah kamu yakin ingin menghapus jadwal "' +
         nama +
         '"?'
     );

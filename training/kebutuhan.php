@@ -3,6 +3,24 @@
    GARUDAFOOD SKILL MONITORING
    KEBUTUHAN TRAINING
 
+   FITUR:
+   - Nilai terendah
+   - Rata-rata nilai SEMUA skill
+   - Filter tahun
+   - Filter nilai
+   - Filter skill / kompetensi
+   - Filter departemen
+   - Filter keterangan
+   - Filter pekerja
+   - Download Excel
+   - Download PDF
+
+   LOGIKA:
+   - Pekerja masuk jika memiliki minimal 1 skill <= 2.5
+   - Rata-rata dihitung dari SEMUA skill pada tahun terpilih
+   - Filter nilai / skill hanya menentukan hasil yang ditampilkan
+   - Filter tidak mengubah perhitungan rata-rata keseluruhan
+
    STRUKTUR PEKERJA:
    - id
    - no_reg
@@ -30,6 +48,63 @@ $batas_nilai = 2.5;
 
 
 /* =========================================================
+   HELPER ESCAPE
+========================================================= */
+
+if (!function_exists('e')) {
+
+    function e($value)
+    {
+        return htmlspecialchars(
+            (string) $value,
+            ENT_QUOTES,
+            'UTF-8'
+        );
+    }
+}
+
+
+/* =========================================================
+   PARAMETER FILTER
+========================================================= */
+
+/* Tahun */
+$filter_tahun = isset($_GET['tahun'])
+    ? (int) $_GET['tahun']
+    : 0;
+
+
+/* Nilai */
+$filter_nilai = isset($_GET['nilai'])
+    ? trim((string) $_GET['nilai'])
+    : '';
+
+
+/* Skill */
+$filter_skill = isset($_GET['skill'])
+    ? (int) $_GET['skill']
+    : 0;
+
+
+/* Departemen */
+$filter_departemen = isset($_GET['departemen'])
+    ? trim((string) $_GET['departemen'])
+    : '';
+
+
+/* Keterangan */
+$filter_keterangan = isset($_GET['keterangan'])
+    ? trim((string) $_GET['keterangan'])
+    : '';
+
+
+/* Pekerja */
+$filter_pekerja = isset($_GET['pekerja'])
+    ? (int) $_GET['pekerja']
+    : 0;
+
+
+/* =========================================================
    TAHUN ASSESSMENT TERBARU
 ========================================================= */
 
@@ -53,12 +128,134 @@ if ($qYear) {
 
 
 /* =========================================================
+   JIKA TAHUN TIDAK DIPILIH
+   GUNAKAN TAHUN TERBARU
+========================================================= */
+
+if ($filter_tahun <= 0) {
+
+    $filter_tahun = $latestYear;
+}
+
+
+/* =========================================================
+   DATA TAHUN
+========================================================= */
+
+$years = [];
+
+$qYears = $conn->query("
+    SELECT DISTINCT tahun
+    FROM penilaian_skill
+    WHERE tahun IS NOT NULL
+      AND tahun > 0
+    ORDER BY tahun DESC
+");
+
+if ($qYears) {
+
+    while ($yr = $qYears->fetch_assoc()) {
+
+        $years[] = (int) $yr['tahun'];
+    }
+}
+
+
+/* =========================================================
+   DATA SKILL UNTUK FILTER
+========================================================= */
+
+$skillFilterData = [];
+
+$qSkillFilter = $conn->query("
+    SELECT
+        id,
+        nama_skill
+    FROM skill
+    WHERE status = 'Aktif'
+    ORDER BY nama_skill ASC
+");
+
+if ($qSkillFilter) {
+
+    while ($sf = $qSkillFilter->fetch_assoc()) {
+
+        $skillFilterData[] = $sf;
+    }
+}
+
+
+/* =========================================================
+   DATA DEPARTEMEN UNTUK FILTER
+========================================================= */
+
+$departments = [];
+
+$qDept = $conn->query("
+    SELECT DISTINCT departemen
+    FROM pekerja
+    WHERE status = 'Aktif'
+      AND departemen IS NOT NULL
+      AND TRIM(departemen) <> ''
+    ORDER BY departemen ASC
+");
+
+if ($qDept) {
+
+    while ($d = $qDept->fetch_assoc()) {
+
+        $departments[] = $d['departemen'];
+    }
+}
+
+
+/* =========================================================
+   DATA PEKERJA UNTUK FILTER
+========================================================= */
+
+$workerFilter = [];
+
+$qWorkerFilter = $conn->query("
+    SELECT
+        id,
+        no_reg,
+        nama,
+        departemen
+    FROM pekerja
+    WHERE status = 'Aktif'
+    ORDER BY nama ASC
+");
+
+if ($qWorkerFilter) {
+
+    while ($wf = $qWorkerFilter->fetch_assoc()) {
+
+        $workerFilter[] = $wf;
+    }
+}
+
+
+/* =========================================================
    DATA TRAINING
 ========================================================= */
 
 $data_training = [];
 
-if ($latestYear > 0) {
+
+/*
+   PENTING:
+
+   Query TIDAK memfilter nilai dan skill di SQL.
+
+   Alasannya:
+   Rata-rata harus tetap dihitung dari SEMUA skill
+   pekerja pada tahun tersebut.
+
+   Filter nilai dan skill akan diterapkan SETELAH
+   semua data berhasil dikelompokkan.
+*/
+
+if ($filter_tahun > 0) {
 
     $sql = "
         SELECT
@@ -89,45 +286,116 @@ if ($latestYear > 0) {
             AND s.status = 'Aktif'
             AND ps.tahun = ?
             AND ps.nilai IS NOT NULL
-            AND ps.nilai <= ?
+    ";
 
+
+    $params = [
+        $filter_tahun
+    ];
+
+    $types = 'i';
+
+
+    /* =====================================================
+       FILTER PEKERJA
+    ===================================================== */
+
+    if ($filter_pekerja > 0) {
+
+        $sql .= "
+            AND p.id = ?
+        ";
+
+        $params[] =
+            $filter_pekerja;
+
+        $types .= 'i';
+    }
+
+
+    /* =====================================================
+       FILTER DEPARTEMEN
+    ===================================================== */
+
+    if ($filter_departemen !== '') {
+
+        $sql .= "
+            AND p.departemen = ?
+        ";
+
+        $params[] =
+            $filter_departemen;
+
+        $types .= 's';
+    }
+
+
+    /* =====================================================
+       FILTER KETERANGAN
+    ===================================================== */
+
+    if ($filter_keterangan !== '') {
+
+        $sql .= "
+            AND p.keterangan LIKE ?
+        ";
+
+        $params[] =
+            '%' .
+            $filter_keterangan .
+            '%';
+
+        $types .= 's';
+    }
+
+
+    $sql .= "
         ORDER BY
-            ps.nilai ASC,
             p.nama ASC,
             s.nama_skill ASC
     ";
 
+
     $stmt = $conn->prepare($sql);
+
 
     if (!$stmt) {
 
         die(
             'Gagal memproses data kebutuhan training: ' .
-            htmlspecialchars(
-                $conn->error,
-                ENT_QUOTES,
-                'UTF-8'
-            )
+            e($conn->error)
         );
     }
 
-    $stmt->bind_param(
-        'id',
-        $latestYear,
-        $batas_nilai
+
+    /* =====================================================
+       BIND PARAMETER DINAMIS
+    ===================================================== */
+
+    $bindValues = [];
+
+    $bindValues[] = &$types;
+
+    foreach ($params as $key => $value) {
+
+        $bindValues[] = &$params[$key];
+    }
+
+
+    call_user_func_array(
+        [$stmt, 'bind_param'],
+        $bindValues
     );
+
 
     if (!$stmt->execute()) {
 
         die(
             'Gagal mengambil data kebutuhan training: ' .
-            htmlspecialchars(
-                $stmt->error,
-                ENT_QUOTES,
-                'UTF-8'
-            )
+            e($stmt->error)
         );
     }
+
 
     $result = $stmt->get_result();
 
@@ -138,9 +406,17 @@ if ($latestYear > 0) {
 
     while ($row = $result->fetch_assoc()) {
 
-        $id_pekerja = (int) $row['id'];
+        $id_pekerja =
+            (int) $row['id'];
 
-        if (!isset($data_training[$id_pekerja])) {
+
+        /* =================================================
+           BUAT DATA PEKERJA
+        ================================================= */
+
+        if (!isset(
+            $data_training[$id_pekerja]
+        )) {
 
             $data_training[$id_pekerja] = [
 
@@ -162,12 +438,31 @@ if ($latestYear > 0) {
                 'status' =>
                     $row['status'] ?? '',
 
+                /* SEMUA NILAI */
+                'all_scores' =>
+                    [],
+
+                /* SEMUA SKILL GAP */
+                'all_gap_skills' =>
+                    [],
+
+                /* SKILL GAP HASIL FILTER */
                 'skills' =>
                     [],
 
+                /* NILAI TERENDAH SEMUA SKILL */
                 'nilai_min' =>
                     null,
 
+                /* RATA-RATA SEMUA SKILL */
+                'nilai_rata' =>
+                    null,
+
+                /* TOTAL ASSESSMENT */
+                'jumlah_assessment' =>
+                    0,
+
+                /* TOTAL GAP SEMUA SKILL */
                 'jumlah_gap' =>
                     0
             ];
@@ -178,36 +473,47 @@ if ($latestYear > 0) {
            NILAI
         ================================================= */
 
-        $nilai = (float) (
-            $row['nilai'] ?? 0
-        );
+        $rawNilai =
+            $row['nilai'];
 
-        $nilai = max(
-            1,
-            min(
-                5,
-                $nilai
-            )
-        );
+
+        if (
+            $rawNilai === null
+            ||
+            $rawNilai === ''
+        ) {
+
+            continue;
+        }
+
+
+        $nilai =
+            (float) $rawNilai;
+
+
+        /*
+           Batasi nilai 1 - 5
+        */
+
+        $nilai =
+            max(
+                1,
+                min(
+                    5,
+                    $nilai
+                )
+            );
 
 
         /* =================================================
-           MASUKKAN SKILL GAP
+           SIMPAN SEMUA NILAI
         ================================================= */
 
-        $data_training[$id_pekerja]['skills'][] = [
+        $data_training[$id_pekerja]['all_scores'][] =
+            $nilai;
 
-            'id_skill' =>
-                (int) (
-                    $row['id_skill'] ?? 0
-                ),
 
-            'nama_skill' =>
-                $row['nama_skill'] ?? '',
-
-            'nilai' =>
-                $nilai
-        ];
+        $data_training[$id_pekerja]['jumlah_assessment']++;
 
 
         /* =================================================
@@ -217,7 +523,8 @@ if ($latestYear > 0) {
         if (
             $data_training[$id_pekerja]['nilai_min'] === null
             ||
-            $nilai < $data_training[$id_pekerja]['nilai_min']
+            $nilai <
+            $data_training[$id_pekerja]['nilai_min']
         ) {
 
             $data_training[$id_pekerja]['nilai_min'] =
@@ -226,13 +533,198 @@ if ($latestYear > 0) {
 
 
         /* =================================================
-           JUMLAH SKILL GAP
+           SIMPAN SKILL GAP
         ================================================= */
 
-        $data_training[$id_pekerja]['jumlah_gap']++;
+        if ($nilai <= $batas_nilai) {
+
+            $gapSkill = [
+
+                'id_skill' =>
+                    (int) (
+                        $row['id_skill'] ?? 0
+                    ),
+
+                'nama_skill' =>
+                    $row['nama_skill'] ?? '',
+
+                'nilai' =>
+                    $nilai
+            ];
+
+
+            $data_training[$id_pekerja]['all_gap_skills'][] =
+                $gapSkill;
+
+
+            $data_training[$id_pekerja]['jumlah_gap']++;
+        }
     }
 
+
     $stmt->close();
+
+
+    /* =====================================================
+       HITUNG RATA-RATA DARI SEMUA SKILL
+    ===================================================== */
+
+    foreach (
+        $data_training
+        as &$worker
+    ) {
+
+        if (
+            !empty(
+                $worker['all_scores']
+            )
+        ) {
+
+            $worker['nilai_rata'] =
+                array_sum(
+                    $worker['all_scores']
+                )
+                /
+                count(
+                    $worker['all_scores']
+                );
+        }
+    }
+
+    unset($worker);
+
+
+    /* =====================================================
+       TERAPKAN FILTER NILAI & SKILL
+       
+       FILTER INI TIDAK MENGUBAH:
+       - nilai_rata
+       - nilai_min
+       - jumlah_assessment
+
+       Filter hanya menentukan:
+       - apakah pekerja ditampilkan
+       - skill gap mana yang ditampilkan
+    ===================================================== */
+
+    foreach (
+        $data_training
+        as $id =>
+        &$worker
+    ) {
+
+        $matchedSkills = [];
+
+
+        foreach (
+            $worker['all_gap_skills']
+            as $gapSkill
+        ) {
+
+            $skillMatch = true;
+            $nilaiMatch = true;
+
+
+            /* =============================================
+               FILTER SKILL
+            ============================================= */
+
+            if (
+                $filter_skill > 0
+                &&
+                (int)$gapSkill['id_skill']
+                !==
+                $filter_skill
+            ) {
+
+                $skillMatch = false;
+            }
+
+
+            /* =============================================
+               FILTER NILAI
+            ============================================= */
+
+            if ($filter_nilai === 'critical') {
+
+                if (
+                    $gapSkill['nilai'] > 1.5
+                ) {
+
+                    $nilaiMatch = false;
+                }
+
+            } elseif ($filter_nilai === 'low') {
+
+                if (
+                    $gapSkill['nilai'] <= 1.5
+                    ||
+                    $gapSkill['nilai'] > 2.0
+                ) {
+
+                    $nilaiMatch = false;
+                }
+
+            } elseif ($filter_nilai === 'medium') {
+
+                if (
+                    $gapSkill['nilai'] <= 2.0
+                    ||
+                    $gapSkill['nilai'] > 2.5
+                ) {
+
+                    $nilaiMatch = false;
+                }
+
+            } elseif ($filter_nilai === 'training') {
+
+                if (
+                    $gapSkill['nilai'] > 2.5
+                ) {
+
+                    $nilaiMatch = false;
+                }
+            }
+
+
+            /* =============================================
+               MASUK HASIL FILTER
+            ============================================= */
+
+            if (
+                $skillMatch
+                &&
+                $nilaiMatch
+            ) {
+
+                $matchedSkills[] =
+                    $gapSkill;
+            }
+        }
+
+
+        $worker['skills'] =
+            $matchedSkills;
+
+
+        /*
+           Kalau tidak ada skill yang cocok dengan
+           filter, pekerja tidak ditampilkan.
+        */
+
+        if (
+            empty(
+                $worker['skills']
+            )
+        ) {
+
+            unset(
+                $data_training[$id]
+            );
+        }
+    }
+
+    unset($worker);
 }
 
 
@@ -240,17 +732,14 @@ if ($latestYear > 0) {
    REINDEX
 ========================================================= */
 
-$data_training = array_values(
-    $data_training
-);
+$data_training =
+    array_values(
+        $data_training
+    );
 
 
 /* =========================================================
-   SORT PRIORITAS TRAINING
-
-   1. Nilai terendah
-   2. Jumlah skill gap terbanyak
-   3. Nama pekerja A-Z
+   SORT PRIORITAS
 ========================================================= */
 
 usort(
@@ -262,53 +751,113 @@ usort(
         $b
     ) {
 
+        /* ================================================
+           1. NILAI TERENDAH
+        ================================================= */
+
         $nilaiA =
             $a['nilai_min'] !== null
-                ? (float) $a['nilai_min']
+                ? (float)$a['nilai_min']
                 : 999;
+
 
         $nilaiB =
             $b['nilai_min'] !== null
-                ? (float) $b['nilai_min']
+                ? (float)$b['nilai_min']
                 : 999;
 
 
-        if ($nilaiA < $nilaiB) {
+        if (
+            $nilaiA < $nilaiB
+        ) {
+
             return -1;
         }
 
-        if ($nilaiA > $nilaiB) {
+
+        if (
+            $nilaiA > $nilaiB
+        ) {
+
             return 1;
         }
 
 
+        /* ================================================
+           2. JUMLAH GAP
+        ================================================= */
+
         $gapA =
-            (int) (
+            (int)(
                 $a['jumlah_gap'] ?? 0
             );
 
+
         $gapB =
-            (int) (
+            (int)(
                 $b['jumlah_gap'] ?? 0
             );
 
 
-        if ($gapA > $gapB) {
+        if (
+            $gapA > $gapB
+        ) {
+
             return -1;
         }
 
-        if ($gapA < $gapB) {
+
+        if (
+            $gapA < $gapB
+        ) {
+
             return 1;
         }
 
 
+        /* ================================================
+           3. RATA-RATA
+        ================================================= */
+
+        $rataA =
+            $a['nilai_rata'] !== null
+                ? (float)$a['nilai_rata']
+                : 999;
+
+
+        $rataB =
+            $b['nilai_rata'] !== null
+                ? (float)$b['nilai_rata']
+                : 999;
+
+
+        if (
+            $rataA < $rataB
+        ) {
+
+            return -1;
+        }
+
+
+        if (
+            $rataA > $rataB
+        ) {
+
+            return 1;
+        }
+
+
+        /* ================================================
+           4. NAMA A-Z
+        ================================================= */
+
         return strcasecmp(
 
-            (string) (
+            (string)(
                 $a['nama'] ?? ''
             ),
 
-            (string) (
+            (string)(
                 $b['nama'] ?? ''
             )
         );
@@ -328,41 +877,46 @@ $total_pekerja_training =
 
 $total_skill_gap = 0;
 
+
+$total_sangat_membutuhkan =
+    0;
+
+
+$total_membutuhkan =
+    0;
+
+
+/*
+   Total skill yang ditampilkan mengikuti filter.
+*/
+
 foreach (
     $data_training
     as $item
 ) {
 
     $total_skill_gap +=
-        (int) (
-            $item['jumlah_gap'] ?? 0
+        count(
+            $item['skills'] ?? []
         );
-}
 
-
-/* =========================================================
-   HITUNG LEVEL KEBUTUHAN
-========================================================= */
-
-$total_sangat_membutuhkan = 0;
-
-$total_membutuhkan = 0;
-
-foreach (
-    $data_training
-    as $item
-) {
 
     if (
         $item['nilai_min'] === null
     ) {
+
         continue;
     }
 
-    $nilai =
-        (float) $item['nilai_min'];
 
-    if ($nilai <= 1.5) {
+    $nilai =
+        (float)
+        $item['nilai_min'];
+
+
+    if (
+        $nilai <= 1.5
+    ) {
 
         $total_sangat_membutuhkan++;
 
@@ -377,56 +931,89 @@ foreach (
    HELPER BADGE
 ========================================================= */
 
-function badgeKebutuhan($nilai)
-{
-    $nilai =
-        (float) $nilai;
+if (!function_exists('badgeKebutuhan')) {
+
+    function badgeKebutuhan($nilai)
+    {
+        $nilai =
+            (float)$nilai;
 
 
-    if ($nilai <= 1.5) {
+        if (
+            $nilai <= 1.5
+        ) {
+
+            return [
+
+                'class' =>
+                    'need-critical',
+
+                'icon' =>
+                    'bi-exclamation-octagon-fill',
+
+                'text' =>
+                    'Sangat Membutuhkan Training'
+            ];
+        }
+
+
+        if (
+            $nilai <= 2.5
+        ) {
+
+            return [
+
+                'class' =>
+                    'need-warning',
+
+                'icon' =>
+                    'bi-exclamation-circle-fill',
+
+                'text' =>
+                    'Membutuhkan Training'
+            ];
+        }
+
 
         return [
 
             'class' =>
-                'need-critical',
+                'need-normal',
 
             'icon' =>
-                'bi-exclamation-octagon-fill',
+                'bi-check-circle-fill',
 
             'text' =>
-                'Sangat Membutuhkan Training'
+                'Kompeten'
         ];
     }
-
-
-    if ($nilai <= 2.5) {
-
-        return [
-
-            'class' =>
-                'need-warning',
-
-            'icon' =>
-                'bi-exclamation-circle-fill',
-
-            'text' =>
-                'Membutuhkan Training'
-        ];
-    }
-
-
-    return [
-
-        'class' =>
-            'need-normal',
-
-        'icon' =>
-            'bi-check-circle-fill',
-
-        'text' =>
-            'Kompeten'
-    ];
 }
+
+
+/* =========================================================
+   URL DOWNLOAD
+========================================================= */
+
+$queryDownload = http_build_query([
+
+    'tahun' =>
+        $filter_tahun,
+
+    'nilai' =>
+        $filter_nilai,
+
+    'skill' =>
+        $filter_skill,
+
+    'departemen' =>
+        $filter_departemen,
+
+    'keterangan' =>
+        $filter_keterangan,
+
+    'pekerja' =>
+        $filter_pekerja
+]);
 
 ?>
 
@@ -443,7 +1030,7 @@ function badgeKebutuhan($nilai)
 
 
 /* =========================================================
-   HEADER BIRU - SEPERTI DASHBOARD
+   HEADER
 ========================================================= */
 
 .training-header {
@@ -460,8 +1047,6 @@ function badgeKebutuhan($nilai)
             #1b5ca3 100%
         );
 
-    border: none;
-
     border-radius: 18px;
 
     padding: 24px 28px;
@@ -472,17 +1057,9 @@ function badgeKebutuhan($nilai)
 
     box-shadow:
         0 10px 28px
-        rgba(
-            18,
-            63,
-            120,
-            .14
-        );
-
+        rgba(18,63,120,.14);
 }
 
-
-/* Ornamen lingkaran seperti Dashboard */
 
 .training-header::before {
 
@@ -491,23 +1068,15 @@ function badgeKebutuhan($nilai)
     position: absolute;
 
     width: 190px;
-
     height: 190px;
 
     border-radius: 50%;
 
-    background: rgba(
-        255,
-        255,
-        255,
-        .055
-    );
+    background:
+        rgba(255,255,255,.055);
 
     right: 35px;
-
     top: -105px;
-
-    pointer-events: none;
 }
 
 
@@ -518,27 +1087,17 @@ function badgeKebutuhan($nilai)
     position: absolute;
 
     width: 145px;
-
     height: 145px;
 
     border-radius: 50%;
 
-    background: rgba(
-        255,
-        255,
-        255,
-        .045
-    );
+    background:
+        rgba(255,255,255,.045);
 
     right: 145px;
-
     bottom: -95px;
-
-    pointer-events: none;
 }
 
-
-/* Isi header harus berada di atas ornamen */
 
 .training-header > div {
 
@@ -552,19 +1111,17 @@ function badgeKebutuhan($nilai)
 
     margin: 0;
 
-    color: #ffffff;
+    color: #fff;
 
     font-size: 22px;
 
     font-weight: 700;
-
-    letter-spacing: -.2px;
 }
 
 
 .training-header h3 i {
 
-    color: #ffffff;
+    color: #fff;
 
     font-size: 19px;
 }
@@ -574,12 +1131,8 @@ function badgeKebutuhan($nilai)
 
     margin: 7px 0 0;
 
-    color: rgba(
-        255,
-        255,
-        255,
-        .82
-    );
+    color:
+        rgba(255,255,255,.82);
 
     font-size: 13px;
 
@@ -589,14 +1142,12 @@ function badgeKebutuhan($nilai)
 
 .training-header p strong {
 
-    color: #ffffff;
-
-    font-weight: 700;
+    color: #fff;
 }
 
 
 /* =========================================================
-   HEADER ACTION
+   ACTION
 ========================================================= */
 
 .training-header-actions {
@@ -615,17 +1166,13 @@ function badgeKebutuhan($nilai)
 }
 
 
-/* =========================================================
-   BUTTON DOWNLOAD EXCEL
-========================================================= */
-
-.training-header-actions .btn-download-excel {
+.btn-download-excel {
 
     background: #198754 !important;
 
     border: 1px solid #198754 !important;
 
-    color: #ffffff !important;
+    color: #fff !important;
 
     border-radius: 9px;
 
@@ -634,53 +1181,16 @@ function badgeKebutuhan($nilai)
     font-weight: 700;
 
     padding: 9px 13px;
-
-    box-shadow:
-        0 4px 10px
-        rgba(
-            25,
-            135,
-            84,
-            .22
-        );
-
-    transition:
-        .2s ease;
 }
 
 
-.training-header-actions .btn-download-excel:hover {
-
-    background: #157347 !important;
-
-    border-color: #157347 !important;
-
-    color: #ffffff !important;
-
-    transform: translateY(-1px);
-
-    box-shadow:
-        0 6px 14px
-        rgba(
-            25,
-            135,
-            84,
-            .30
-        );
-}
-
-
-/* =========================================================
-   BUTTON DOWNLOAD PDF
-========================================================= */
-
-.training-header-actions .btn-download-pdf {
+.btn-download-pdf {
 
     background: #dc3545 !important;
 
     border: 1px solid #dc3545 !important;
 
-    color: #ffffff !important;
+    color: #fff !important;
 
     border-radius: 9px;
 
@@ -689,45 +1199,8 @@ function badgeKebutuhan($nilai)
     font-weight: 700;
 
     padding: 9px 13px;
-
-    box-shadow:
-        0 4px 10px
-        rgba(
-            220,
-            53,
-            69,
-            .22
-        );
-
-    transition:
-        .2s ease;
 }
 
-
-.training-header-actions .btn-download-pdf:hover {
-
-    background: #bb2d3b !important;
-
-    border-color: #bb2d3b !important;
-
-    color: #ffffff !important;
-
-    transform: translateY(-1px);
-
-    box-shadow:
-        0 6px 14px
-        rgba(
-            220,
-            53,
-            69,
-            .30
-        );
-}
-
-
-/* =========================================================
-   YEAR BADGE
-========================================================= */
 
 .year-badge {
 
@@ -741,27 +1214,152 @@ function badgeKebutuhan($nilai)
 
     border-radius: 8px;
 
-    background: rgba(
-        255,
-        255,
-        255,
-        .12
-    );
+    background:
+        rgba(255,255,255,.12);
 
-    color: #ffffff;
+    color: #fff;
 
-    border: 1px solid rgba(
-        255,
-        255,
-        255,
-        .22
-    );
+    border:
+        1px solid
+        rgba(255,255,255,.22);
 
     font-size: 11px;
 
     font-weight: 700;
+}
 
-    backdrop-filter: blur(4px);
+
+/* =========================================================
+   FILTER
+========================================================= */
+
+.filter-card {
+
+    background: #fff;
+
+    border: 1px solid #e5ebf3;
+
+    border-radius: 16px;
+
+    padding: 17px;
+
+    margin-bottom: 18px;
+
+    box-shadow:
+        0 2px 8px
+        rgba(18,59,114,.025);
+}
+
+
+.filter-title {
+
+    color: #123b72;
+
+    font-size: 14px;
+
+    font-weight: 700;
+
+    margin-bottom: 13px;
+}
+
+
+.filter-label {
+
+    color: #6d7a8d;
+
+    font-size: 10px;
+
+    font-weight: 700;
+
+    text-transform: uppercase;
+
+    letter-spacing: .04em;
+
+    margin-bottom: 5px;
+}
+
+
+.filter-card .form-select,
+.filter-card .form-control {
+
+    height: 39px;
+
+    border-radius: 8px;
+
+    border-color: #dce4ee;
+
+    font-size: 12px;
+}
+
+
+.filter-card .form-select:focus,
+.filter-card .form-control:focus {
+
+    border-color: #123f7a;
+
+    box-shadow:
+        0 0 0 .15rem
+        rgba(18,63,122,.10);
+}
+
+
+.filter-card .btn {
+
+    height: 39px;
+
+    border-radius: 8px;
+
+    font-size: 12px;
+
+    font-weight: 700;
+}
+
+
+.btn-filter {
+
+    background: #123f7a;
+
+    border-color: #123f7a;
+
+    color: #fff;
+}
+
+
+.btn-filter:hover {
+
+    background: #092f63;
+
+    border-color: #092f63;
+
+    color: #fff;
+}
+
+
+/* =========================================================
+   ACTIVE FILTER
+========================================================= */
+
+.active-filter {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    gap: 5px;
+
+    background: #edf4ff;
+
+    color: #123f7a;
+
+    border: 1px solid #d4e4fa;
+
+    border-radius: 20px;
+
+    padding: 5px 9px;
+
+    font-size: 10px;
+
+    font-weight: 600;
 }
 
 
@@ -771,7 +1369,7 @@ function badgeKebutuhan($nilai)
 
 .training-stat {
 
-    background: #ffffff;
+    background: #fff;
 
     border: 1px solid #e5ebf3;
 
@@ -783,12 +1381,7 @@ function badgeKebutuhan($nilai)
 
     box-shadow:
         0 2px 8px
-        rgba(
-            18,
-            59,
-            114,
-            .025
-        );
+        rgba(18,59,114,.025);
 }
 
 
@@ -838,7 +1431,7 @@ function badgeKebutuhan($nilai)
 
 .training-container {
 
-    background: #ffffff;
+    background: #fff;
 
     border: 1px solid #e5ebf3;
 
@@ -848,12 +1441,7 @@ function badgeKebutuhan($nilai)
 
     box-shadow:
         0 2px 8px
-        rgba(
-            18,
-            59,
-            114,
-            .025
-        );
+        rgba(18,59,114,.025);
 }
 
 
@@ -885,14 +1473,11 @@ function badgeKebutuhan($nilai)
 
     border-radius: 16px;
 
-    padding: 18px;
+    padding: 17px;
 
-    background: #ffffff;
+    background: #fff;
 
-    transition:
-        box-shadow .2s ease,
-        border-color .2s ease,
-        transform .2s ease;
+    transition: .2s ease;
 }
 
 
@@ -902,32 +1487,27 @@ function badgeKebutuhan($nilai)
 
     box-shadow:
         0 7px 22px
-        rgba(
-            18,
-            59,
-            114,
-            .07
-        );
+        rgba(18,59,114,.07);
 
     transform: translateY(-1px);
 }
 
 
 /* =========================================================
-   WORKER TOP
+   TOP
 ========================================================= */
 
 .worker-top {
 
     display: flex;
 
-    align-items: center;
+    align-items: flex-start;
 
     justify-content: space-between;
 
-    gap: 15px;
+    gap: 18px;
 
-    margin-bottom: 15px;
+    margin-bottom: 14px;
 }
 
 
@@ -935,23 +1515,25 @@ function badgeKebutuhan($nilai)
 
     display: flex;
 
-    align-items: center;
+    align-items: flex-start;
 
-    gap: 13px;
+    gap: 12px;
 
     min-width: 0;
+
+    flex: 1;
 }
 
 
 .worker-avatar-training {
 
-    width: 47px;
+    width: 44px;
 
-    height: 47px;
+    height: 44px;
 
-    flex: 0 0 47px;
+    flex: 0 0 44px;
 
-    border-radius: 13px;
+    border-radius: 12px;
 
     background: #edf4ff;
 
@@ -965,7 +1547,7 @@ function badgeKebutuhan($nilai)
 
     font-weight: 800;
 
-    font-size: 18px;
+    font-size: 17px;
 }
 
 
@@ -973,7 +1555,7 @@ function badgeKebutuhan($nilai)
 
     color: #123b72;
 
-    font-size: 16px;
+    font-size: 15px;
 
     font-weight: 700;
 
@@ -995,7 +1577,7 @@ function badgeKebutuhan($nilai)
 
     color: #7b8798;
 
-    font-size: 12px;
+    font-size: 11px;
 
     margin-top: 3px;
 
@@ -1010,36 +1592,68 @@ function badgeKebutuhan($nilai)
 
 
 /* =========================================================
-   NILAI TERENDAH
+   NILAI
 ========================================================= */
 
-.worker-min {
+.worker-score-area {
 
-    text-align: right;
+    display: flex;
 
-    min-width: 110px;
+    align-items: flex-start;
+
+    gap: 20px;
+
+    flex-shrink: 0;
 }
 
 
-.worker-min-label {
+.score-box {
+
+    text-align: right;
+
+    min-width: 85px;
+}
+
+
+.score-box-label {
 
     color: #8a96a7;
 
-    font-size: 11px;
+    font-size: 10px;
 
     margin-bottom: 2px;
 }
 
 
-.worker-min-value {
+.score-box-value {
 
-    color: #dc3545;
-
-    font-size: 24px;
+    font-size: 21px;
 
     font-weight: 800;
 
     line-height: 1.1;
+}
+
+
+.score-average {
+
+    color: #123f7a;
+}
+
+
+.score-min {
+
+    color: #dc3545;
+}
+
+
+.score-box-note {
+
+    color: #9aa4b2;
+
+    font-size: 9px;
+
+    margin-top: 3px;
 }
 
 
@@ -1051,7 +1665,7 @@ function badgeKebutuhan($nilai)
 
     border-top: 1px solid #edf0f5;
 
-    padding-top: 15px;
+    padding-top: 14px;
 }
 
 
@@ -1059,17 +1673,13 @@ function badgeKebutuhan($nilai)
 
     color: #66758a;
 
-    font-size: 12px;
+    font-size: 11px;
 
     font-weight: 600;
 
     margin-bottom: 9px;
 }
 
-
-/* =========================================================
-   SKILL
-========================================================= */
 
 .skill-list {
 
@@ -1099,7 +1709,7 @@ function badgeKebutuhan($nilai)
 
     color: #b42336;
 
-    font-size: 11px;
+    font-size: 10px;
 
     font-weight: 600;
 
@@ -1127,9 +1737,9 @@ function badgeKebutuhan($nilai)
 
     background: #e83e4d;
 
-    color: #ffffff;
+    color: #fff;
 
-    font-size: 10px;
+    font-size: 9px;
 
     font-weight: 800;
 
@@ -1138,7 +1748,7 @@ function badgeKebutuhan($nilai)
 
 
 /* =========================================================
-   NEED BADGE
+   BADGE
 ========================================================= */
 
 .need-badge {
@@ -1153,7 +1763,7 @@ function badgeKebutuhan($nilai)
 
     padding: 5px 8px;
 
-    font-size: 10px;
+    font-size: 9px;
 
     font-weight: 700;
 
@@ -1187,21 +1797,21 @@ function badgeKebutuhan($nilai)
 
     color: #198754;
 
-    border: 1px solid #c8ead8;
+    border: 1px solid #ccebdc;
 }
 
 
 /* =========================================================
-   FOOTER CARD
+   FOOTER
 ========================================================= */
 
 .worker-footer {
 
     border-top: 1px solid #edf0f5;
 
-    margin-top: 15px;
+    margin-top: 14px;
 
-    padding-top: 12px;
+    padding-top: 11px;
 
     display: flex;
 
@@ -1217,13 +1827,21 @@ function badgeKebutuhan($nilai)
 
     color: #7b8798;
 
-    font-size: 11px;
+    font-size: 10px;
 }
 
 
 .gap-count strong {
 
     color: #123b72;
+}
+
+
+.worker-footer .btn {
+
+    font-size: 10px;
+
+    border-radius: 7px;
 }
 
 
@@ -1289,6 +1907,27 @@ function badgeKebutuhan($nilai)
    RESPONSIVE
 ========================================================= */
 
+@media (max-width: 992px) {
+
+    .worker-top {
+
+        flex-direction: column;
+    }
+
+    .worker-score-area {
+
+        width: 100%;
+
+        justify-content: flex-start;
+    }
+
+    .score-box {
+
+        text-align: left;
+    }
+}
+
+
 @media (max-width: 768px) {
 
     .training-header {
@@ -1316,8 +1955,6 @@ function badgeKebutuhan($nilai)
         flex: 1;
 
         min-width: 130px;
-
-        justify-content: center;
     }
 
 
@@ -1333,23 +1970,22 @@ function badgeKebutuhan($nilai)
     }
 
 
-    .worker-top {
+    .worker-score-area {
 
-        align-items: flex-start;
+        gap: 20px;
     }
 
 
-    .worker-min {
+    .score-box {
 
-        min-width: 80px;
+        min-width: 70px;
     }
 
 
-    .worker-min-value {
+    .score-box-value {
 
-        font-size: 20px;
+        font-size: 18px;
     }
-
 }
 
 
@@ -1377,23 +2013,17 @@ function badgeKebutuhan($nilai)
     }
 
 
-    .worker-top {
+    .filter-card {
 
-        flex-direction: column;
+        padding: 13px;
     }
 
 
-    .worker-main {
-
-        width: 100%;
-    }
-
-
-    .worker-min {
+    .worker-score-area {
 
         width: 100%;
 
-        text-align: left;
+        gap: 22px;
     }
 
 
@@ -1417,7 +2047,6 @@ function badgeKebutuhan($nilai)
 
         justify-content: space-between;
     }
-
 }
 
 </style>
@@ -1431,7 +2060,7 @@ function badgeKebutuhan($nilai)
 
 
     <!-- =====================================================
-         HEADER BIRU
+         HEADER
     ====================================================== -->
 
     <div class="training-header">
@@ -1465,14 +2094,14 @@ function badgeKebutuhan($nilai)
 
                 <p>
 
-                    Daftar pekerja dengan nilai kompetensi
+                    Daftar pekerja dengan kompetensi
                     <strong>2,5 atau lebih rendah</strong>
-                    berdasarkan assessment terbaru.
+                    berdasarkan assessment.
 
                 </p>
 
 
-                <?php if ($latestYear > 0): ?>
+                <?php if ($filter_tahun > 0): ?>
 
                     <div class="mt-3">
 
@@ -1481,9 +2110,7 @@ function badgeKebutuhan($nilai)
                             <i class="bi bi-calendar3"></i>
 
                             Assessment Tahun
-                            <?= e(
-                                (string) $latestYear
-                            ) ?>
+                            <?= e($filter_tahun) ?>
 
                         </span>
 
@@ -1494,18 +2121,16 @@ function badgeKebutuhan($nilai)
             </div>
 
 
-            <!-- =================================================
-                 DOWNLOAD
-            ================================================== -->
+            <!-- DOWNLOAD -->
 
             <div class="training-header-actions">
 
-                <?php if ($total_pekerja_training > 0): ?>
-
-                    <!-- EXCEL HIJAU PENUH -->
+                <?php if (
+                    $total_pekerja_training > 0
+                ): ?>
 
                     <a
-                        href="laporan_training.php?format=xls"
+                        href="laporan_training.php?format=xls&<?= e($queryDownload) ?>"
                         class="
                             btn
                             btn-sm
@@ -1526,10 +2151,8 @@ function badgeKebutuhan($nilai)
                     </a>
 
 
-                    <!-- PDF MERAH PENUH -->
-
                     <a
-                        href="laporan_training.php?format=pdf"
+                        href="laporan_training.php?format=pdf&<?= e($queryDownload) ?>"
                         target="_blank"
                         rel="noopener"
                         class="
@@ -1561,13 +2184,561 @@ function badgeKebutuhan($nilai)
 
 
     <!-- =====================================================
+         FILTER
+    ====================================================== -->
+
+    <div class="filter-card">
+
+        <div class="filter-title">
+
+            <i
+                class="
+                    bi
+                    bi-funnel-fill
+                    me-1
+                "
+            ></i>
+
+            Filter Kebutuhan Training
+
+        </div>
+
+
+        <form
+            method="get"
+            class="row g-2 align-items-end"
+        >
+
+
+            <!-- TAHUN -->
+
+            <div class="col-xl-2 col-lg-3 col-md-4">
+
+                <div class="filter-label">
+
+                    Tahun Assessment
+
+                </div>
+
+
+                <select
+                    name="tahun"
+                    class="form-select"
+                >
+
+                    <?php foreach (
+                        $years
+                        as $y
+                    ): ?>
+
+                        <option
+                            value="<?= (int)$y ?>"
+                            <?= $filter_tahun == $y
+                                ? 'selected'
+                                : ''
+                            ?>
+                        >
+
+                            <?= (int)$y ?>
+
+                        </option>
+
+                    <?php endforeach; ?>
+
+                </select>
+
+            </div>
+
+
+            <!-- NILAI -->
+
+            <div class="col-xl-2 col-lg-3 col-md-4">
+
+                <div class="filter-label">
+
+                    Nilai
+
+                </div>
+
+
+                <select
+                    name="nilai"
+                    class="form-select"
+                >
+
+                    <option
+                        value=""
+                        <?= $filter_nilai === ''
+                            ? 'selected'
+                            : ''
+                        ?>
+                    >
+
+                        Semua Nilai Training
+
+                    </option>
+
+
+                    <option
+                        value="critical"
+                        <?= $filter_nilai === 'critical'
+                            ? 'selected'
+                            : ''
+                        ?>
+                    >
+
+                        ≤ 1,50 — Sangat Kritis
+
+                    </option>
+
+
+                    <option
+                        value="low"
+                        <?= $filter_nilai === 'low'
+                            ? 'selected'
+                            : ''
+                        ?>
+                    >
+
+                        1,51 – 2,00
+
+                    </option>
+
+
+                    <option
+                        value="medium"
+                        <?= $filter_nilai === 'medium'
+                            ? 'selected'
+                            : ''
+                        ?>
+                    >
+
+                        2,01 – 2,50
+
+                    </option>
+
+
+                    <option
+                        value="training"
+                        <?= $filter_nilai === 'training'
+                            ? 'selected'
+                            : ''
+                        ?>
+                    >
+
+                        ≤ 2,50 — Semua Training
+
+                    </option>
+
+                </select>
+
+            </div>
+
+
+            <!-- SKILL -->
+
+            <div class="col-xl-2 col-lg-3 col-md-4">
+
+                <div class="filter-label">
+
+                    Kompetensi / Skill
+
+                </div>
+
+
+                <select
+                    name="skill"
+                    class="form-select"
+                >
+
+                    <option value="0">
+
+                        Semua Skill
+
+                    </option>
+
+
+                    <?php foreach (
+                        $skillFilterData
+                        as $sf
+                    ): ?>
+
+                        <option
+                            value="<?= (int)$sf['id'] ?>"
+                            <?= $filter_skill ==
+                                (int)$sf['id']
+                                    ? 'selected'
+                                    : ''
+                            ?>
+                        >
+
+                            <?= e(
+                                $sf['nama_skill']
+                            ) ?>
+
+                        </option>
+
+                    <?php endforeach; ?>
+
+                </select>
+
+            </div>
+
+
+            <!-- DEPARTEMEN -->
+
+            <div class="col-xl-2 col-lg-3 col-md-4">
+
+                <div class="filter-label">
+
+                    Departemen
+
+                </div>
+
+
+                <select
+                    name="departemen"
+                    class="form-select"
+                >
+
+                    <option value="">
+
+                        Semua Departemen
+
+                    </option>
+
+
+                    <?php foreach (
+                        $departments
+                        as $dept
+                    ): ?>
+
+                        <option
+                            value="<?= e($dept) ?>"
+                            <?= $filter_departemen === $dept
+                                ? 'selected'
+                                : ''
+                            ?>
+                        >
+
+                            <?= e($dept) ?>
+
+                        </option>
+
+                    <?php endforeach; ?>
+
+                </select>
+
+            </div>
+
+
+            <!-- PEKERJA -->
+
+            <div class="col-xl-2 col-lg-3 col-md-4">
+
+                <div class="filter-label">
+
+                    Pekerja
+
+                </div>
+
+
+                <select
+                    name="pekerja"
+                    class="form-select"
+                >
+
+                    <option value="0">
+
+                        Semua Pekerja
+
+                    </option>
+
+
+                    <?php foreach (
+                        $workerFilter
+                        as $wf
+                    ): ?>
+
+                        <option
+                            value="<?= (int)$wf['id'] ?>"
+                            <?= $filter_pekerja ==
+                                (int)$wf['id']
+                                    ? 'selected'
+                                    : ''
+                            ?>
+                        >
+
+                            <?= e(
+                                $wf['nama']
+                            ) ?>
+
+                            <?php if (
+                                !empty(
+                                    $wf['no_reg']
+                                )
+                            ): ?>
+
+                                -
+                                <?= e(
+                                    $wf['no_reg']
+                                ) ?>
+
+                            <?php endif; ?>
+
+                        </option>
+
+                    <?php endforeach; ?>
+
+                </select>
+
+            </div>
+
+
+            <!-- BUTTON -->
+
+            <div class="col-xl-2 col-lg-3 col-md-4">
+
+                <div class="filter-label">
+
+                    &nbsp;
+
+                </div>
+
+
+                <div class="d-flex gap-2">
+
+                    <button
+                        type="submit"
+                        class="
+                            btn
+                            btn-filter
+                            flex-grow-1
+                        "
+                    >
+
+                        <i
+                            class="
+                                bi
+                                bi-search
+                                me-1
+                            "
+                        ></i>
+
+                        Terapkan
+
+                    </button>
+
+
+                    <a
+                        href="kebutuhan.php"
+                        class="
+                            btn
+                            btn-light
+                            border
+                        "
+                        title="Reset Filter"
+                    >
+
+                        <i
+                            class="
+                                bi
+                                bi-arrow-counterclockwise
+                            "
+                        ></i>
+
+                    </a>
+
+                </div>
+
+            </div>
+
+
+            <!-- KETERANGAN -->
+
+            <div class="col-xl-6 col-lg-6 col-md-8">
+
+                <div class="filter-label">
+
+                    Keterangan Pekerja
+
+                </div>
+
+
+                <input
+                    type="text"
+                    name="keterangan"
+                    class="form-control"
+                    value="<?= e(
+                        $filter_keterangan
+                    ) ?>"
+                    placeholder="Contoh: Operator, Teknisi, Senior, Junior"
+                >
+
+            </div>
+
+
+        </form>
+
+
+        <!-- FILTER AKTIF -->
+
+        <?php
+
+        $activeFilters = [];
+
+
+        if ($filter_nilai !== '') {
+
+            $nilaiLabel = [
+
+                'critical' =>
+                    'Nilai ≤ 1,50',
+
+                'low' =>
+                    'Nilai 1,51 – 2,00',
+
+                'medium' =>
+                    'Nilai 2,01 – 2,50',
+
+                'training' =>
+                    'Nilai ≤ 2,50'
+            ];
+
+
+            $activeFilters[] =
+                $nilaiLabel[
+                    $filter_nilai
+                ]
+                ??
+                $filter_nilai;
+        }
+
+
+        if ($filter_skill > 0) {
+
+            foreach (
+                $skillFilterData
+                as $sf
+            ) {
+
+                if (
+                    (int)$sf['id']
+                    ===
+                    $filter_skill
+                ) {
+
+                    $activeFilters[] =
+                        'Skill: ' .
+                        $sf['nama_skill'];
+
+                    break;
+                }
+            }
+        }
+
+
+        if ($filter_departemen !== '') {
+
+            $activeFilters[] =
+                'Departemen: ' .
+                $filter_departemen;
+        }
+
+
+        if ($filter_pekerja > 0) {
+
+            foreach (
+                $workerFilter
+                as $wf
+            ) {
+
+                if (
+                    (int)$wf['id']
+                    ===
+                    $filter_pekerja
+                ) {
+
+                    $activeFilters[] =
+                        'Pekerja: ' .
+                        $wf['nama'];
+
+                    break;
+                }
+            }
+        }
+
+
+        if ($filter_keterangan !== '') {
+
+            $activeFilters[] =
+                'Keterangan: ' .
+                $filter_keterangan;
+        }
+
+        ?>
+
+
+        <?php if (
+            !empty(
+                $activeFilters
+            )
+        ): ?>
+
+            <div
+                class="
+                    d-flex
+                    align-items-center
+                    gap-2
+                    flex-wrap
+                    mt-3
+                "
+            >
+
+                <small class="text-muted">
+
+                    Filter aktif:
+
+                </small>
+
+
+                <?php foreach (
+                    $activeFilters
+                    as $af
+                ): ?>
+
+                    <span
+                        class="active-filter"
+                    >
+
+                        <i
+                            class="
+                                bi
+                                bi-check-circle
+                            "
+                        ></i>
+
+                        <?= e($af) ?>
+
+                    </span>
+
+                <?php endforeach; ?>
+
+            </div>
+
+        <?php endif; ?>
+
+    </div>
+
+
+    <!-- =====================================================
          STATISTIK
     ====================================================== -->
 
     <div class="row g-3 mb-3">
 
 
-        <!-- TOTAL PEKERJA -->
+        <!-- PEKERJA -->
 
         <div class="col-xl-4 col-md-6">
 
@@ -1601,14 +2772,22 @@ function badgeKebutuhan($nilai)
 
                     <div>
 
-                        <div class="training-stat-label">
+                        <div
+                            class="
+                                training-stat-label
+                            "
+                        >
 
                             Pekerja Membutuhkan Training
 
                         </div>
 
 
-                        <div class="training-stat-number">
+                        <div
+                            class="
+                                training-stat-number
+                            "
+                        >
 
                             <?= number_format(
                                 $total_pekerja_training
@@ -1625,7 +2804,7 @@ function badgeKebutuhan($nilai)
         </div>
 
 
-        <!-- TOTAL SKILL -->
+        <!-- SKILL GAP -->
 
         <div class="col-xl-4 col-md-6">
 
@@ -1659,14 +2838,22 @@ function badgeKebutuhan($nilai)
 
                     <div>
 
-                        <div class="training-stat-label">
+                        <div
+                            class="
+                                training-stat-label
+                            "
+                        >
 
                             Total Skill Perlu Training
 
                         </div>
 
 
-                        <div class="training-stat-number">
+                        <div
+                            class="
+                                training-stat-number
+                            "
+                        >
 
                             <?= number_format(
                                 $total_skill_gap
@@ -1717,14 +2904,22 @@ function badgeKebutuhan($nilai)
 
                     <div>
 
-                        <div class="training-stat-label">
+                        <div
+                            class="
+                                training-stat-label
+                            "
+                        >
 
                             Sangat Membutuhkan Training
 
                         </div>
 
 
-                        <div class="training-stat-number">
+                        <div
+                            class="
+                                training-stat-number
+                            "
+                        >
 
                             <?= number_format(
                                 $total_sangat_membutuhkan
@@ -1763,24 +2958,34 @@ function badgeKebutuhan($nilai)
 
             <div>
 
-                <div class="training-section-title">
+                <div
+                    class="
+                        training-section-title
+                    "
+                >
 
                     Daftar Pekerja yang Membutuhkan Training
 
                 </div>
 
 
-                <div class="training-section-note">
+                <div
+                    class="
+                        training-section-note
+                    "
+                >
 
-                    Semakin rendah nilai,
-                    semakin tinggi prioritas training.
+                    Prioritas berdasarkan nilai terendah,
+                    jumlah skill gap, kemudian rata-rata nilai.
 
                 </div>
 
             </div>
 
 
-            <?php if ($total_pekerja_training > 0): ?>
+            <?php if (
+                $total_pekerja_training > 0
+            ): ?>
 
                 <span
                     class="
@@ -1812,22 +3017,37 @@ function badgeKebutuhan($nilai)
         </div>
 
 
-        <?php if (!empty($data_training)): ?>
+        <?php if (
+            !empty(
+                $data_training
+            )
+        ): ?>
 
 
-            <div class="d-flex flex-column gap-3">
+            <div
+                class="
+                    d-flex
+                    flex-column
+                    gap-3
+                "
+            >
 
 
-                <?php
-
-                foreach (
+                <?php foreach (
                     $data_training
                     as $worker
                 ):
 
+
                     $nilai_min =
                         $worker['nilai_min'] !== null
-                            ? (float) $worker['nilai_min']
+                            ? (float)$worker['nilai_min']
+                            : 0;
+
+
+                    $nilai_rata =
+                        $worker['nilai_rata'] !== null
+                            ? (float)$worker['nilai_rata']
                             : 0;
 
 
@@ -1839,15 +3059,14 @@ function badgeKebutuhan($nilai)
 
                     $namaWorker =
                         trim(
-                            (string) (
-                                $worker['nama'] ?? ''
+                            (string)(
+                                $worker['nama']
+                                ?? ''
                             )
                         );
 
 
-                    /* =================================================
-                       INISIAL
-                    ================================================= */
+                    /* INITIAL */
 
                     $initial = '?';
 
@@ -1857,7 +3076,9 @@ function badgeKebutuhan($nilai)
                     ) {
 
                         if (
-                            function_exists('mb_substr')
+                            function_exists(
+                                'mb_substr'
+                            )
                         ) {
 
                             $initial =
@@ -1884,26 +3105,41 @@ function badgeKebutuhan($nilai)
                         }
                     }
 
+
+                    $keterangan =
+                        trim(
+                            (string)(
+                                $worker['keterangan']
+                                ?? ''
+                            )
+                        );
+
                 ?>
 
 
                     <!-- =================================================
                          WORKER CARD
-                    ================================================= -->
+                    ================================================== -->
 
                     <div
-                        class="worker-training-card"
+                        class="
+                            worker-training-card
+                        "
                     >
 
 
-                        <!-- =================================================
-                             TOP
-                        ================================================= -->
+                        <!-- TOP -->
 
-                        <div class="worker-top">
+                        <div
+                            class="worker-top"
+                        >
 
 
-                            <div class="worker-main">
+                            <!-- WORKER -->
+
+                            <div
+                                class="worker-main"
+                            >
 
 
                                 <div
@@ -1920,14 +3156,14 @@ function badgeKebutuhan($nilai)
 
 
                                 <div
-                                    style="min-width:0;"
+                                    style="
+                                        min-width:0;
+                                    "
                                 >
 
 
-                                    <!-- NAMA -->
-
                                     <a
-                                        href="../pekerja/detail.php?id=<?= (int) $worker['id'] ?>"
+                                        href="../pekerja/detail.php?id=<?= (int)$worker['id'] ?>"
                                         class="
                                             worker-name-training
                                         "
@@ -1939,8 +3175,6 @@ function badgeKebutuhan($nilai)
 
                                     </a>
 
-
-                                    <!-- NO REG + DEPARTEMEN -->
 
                                     <div
                                         class="worker-meta"
@@ -1971,21 +3205,6 @@ function badgeKebutuhan($nilai)
                                     </div>
 
 
-                                    <!-- KETERANGAN -->
-
-                                    <?php
-
-                                    $keterangan =
-                                        trim(
-                                            (string) (
-                                                $worker['keterangan']
-                                                ?? ''
-                                            )
-                                        );
-
-                                    ?>
-
-
                                     <div
                                         class="worker-meta"
                                     >
@@ -2014,8 +3233,6 @@ function badgeKebutuhan($nilai)
 
                                     </div>
 
-
-                                    <!-- BADGE -->
 
                                     <div>
 
@@ -2052,50 +3269,108 @@ function badgeKebutuhan($nilai)
                             </div>
 
 
-                            <!-- =================================================
-                                 NILAI TERENDAH
-                            ================================================== -->
+                            <!-- NILAI -->
 
-                            <div class="worker-min">
+                            <div
+                                class="
+                                    worker-score-area
+                                "
+                            >
+
+
+                                <!-- RATA-RATA -->
 
                                 <div
-                                    class="
-                                        worker-min-label
-                                    "
+                                    class="score-box"
                                 >
 
-                                    Nilai Terendah
+                                    <div
+                                        class="
+                                            score-box-label
+                                        "
+                                    >
+
+                                        Rata-rata Nilai
+
+                                    </div>
+
+
+                                    <div
+                                        class="
+                                            score-box-value
+                                            score-average
+                                        "
+                                    >
+
+                                        <?= number_format(
+                                            $nilai_rata,
+                                            2,
+                                            ',',
+                                            '.'
+                                        ) ?>
+
+                                    </div>
+
+
+                                    <div
+                                        class="
+                                            score-box-note
+                                        "
+                                    >
+
+                                        Semua skill
+
+                                    </div>
 
                                 </div>
 
 
+                                <!-- TERENDAH -->
+
                                 <div
-                                    class="
-                                        worker-min-value
-                                    "
+                                    class="score-box"
                                 >
 
-                                    <?= number_format(
-                                        $nilai_min,
-                                        2,
-                                        ',',
-                                        '.'
-                                    ) ?>
+                                    <div
+                                        class="
+                                            score-box-label
+                                        "
+                                    >
+
+                                        Nilai Terendah
+
+                                    </div>
+
+
+                                    <div
+                                        class="
+                                            score-box-value
+                                            score-min
+                                        "
+                                    >
+
+                                        <?= number_format(
+                                            $nilai_min,
+                                            2,
+                                            ',',
+                                            '.'
+                                        ) ?>
+
+                                    </div>
+
+
+                                    <div
+                                        class="
+                                            score-box-note
+                                        "
+                                    >
+
+                                        Batas 2,50
+
+                                    </div>
 
                                 </div>
 
-
-                                <div
-                                    class="
-                                        small
-                                        text-muted
-                                        mt-1
-                                    "
-                                >
-
-                                    Maks. 2,50
-
-                                </div>
 
                             </div>
 
@@ -2107,10 +3382,16 @@ function badgeKebutuhan($nilai)
                              SKILL GAP
                         ================================================== -->
 
-                        <div class="gap-section">
+                        <div
+                            class="
+                                gap-section
+                            "
+                        >
 
 
-                            <div class="gap-title">
+                            <div
+                                class="gap-title"
+                            >
 
                                 <i
                                     class="
@@ -2125,19 +3406,21 @@ function badgeKebutuhan($nilai)
                             </div>
 
 
-                            <div class="skill-list">
+                            <div
+                                class="skill-list"
+                            >
 
 
-                                <?php
-
-                                foreach (
+                                <?php foreach (
                                     $worker['skills']
                                     as $skill
                                 ):
 
+
                                     $nilai_skill =
-                                        (float) (
-                                            $skill['nilai'] ?? 0
+                                        (float)(
+                                            $skill['nilai']
+                                            ?? 0
                                         );
 
                                 ?>
@@ -2203,9 +3486,7 @@ function badgeKebutuhan($nilai)
 
 
                             <div
-                                class="
-                                    gap-count
-                                "
+                                class="gap-count"
                             >
 
                                 <i
@@ -2220,22 +3501,40 @@ function badgeKebutuhan($nilai)
                                 <strong>
 
                                     <?= number_format(
-                                        (int) (
-                                            $worker['jumlah_gap']
-                                            ?? 0
+                                        count(
+                                            $worker['skills'] ?? []
                                         )
                                     ) ?>
 
                                 </strong>
 
 
-                                skill perlu ditingkatkan
+                                skill ditampilkan
+
+
+                                <span
+                                    class="ms-2"
+                                >
+
+                                    •
+                                    <?= number_format(
+                                        (int)(
+                                            $worker[
+                                                'jumlah_assessment'
+                                            ]
+                                            ?? 0
+                                        )
+                                    ) ?>
+
+                                    assessment
+
+                                </span>
 
                             </div>
 
 
                             <a
-                                href="../pekerja/detail.php?id=<?= (int) $worker['id'] ?>"
+                                href="../pekerja/detail.php?id=<?= (int)$worker['id'] ?>"
                                 class="
                                     btn
                                     btn-sm
@@ -2275,10 +3574,16 @@ function badgeKebutuhan($nilai)
                  EMPTY
             ================================================== -->
 
-            <div class="training-empty">
+            <div
+                class="training-empty"
+            >
 
 
-                <div class="training-empty-icon">
+                <div
+                    class="
+                        training-empty-icon
+                    "
+                >
 
                     <i
                         class="
@@ -2290,29 +3595,53 @@ function badgeKebutuhan($nilai)
                 </div>
 
 
-                <div class="training-empty-title">
+                <div
+                    class="
+                        training-empty-title
+                    "
+                >
 
                     Tidak Ada Pekerja yang Membutuhkan Training
 
                 </div>
 
 
-                <div class="training-empty-text">
+                <div
+                    class="
+                        training-empty-text
+                    "
+                >
 
-                    <?php if ($latestYear > 0): ?>
+                    <?php if (
+                        $filter_tahun > 0
+                    ): ?>
 
-                        Tidak ada nilai kompetensi
-                        pada atau di bawah 2,5
-                        untuk assessment tahun
+                        Tidak ada pekerja aktif
+                        dengan skill yang memenuhi
+                        kriteria filter pada assessment
+                        tahun
 
-                        <?= e(
-                            (string) $latestYear
-                        ) ?>.
+                        <strong>
+                            <?= e(
+                                (string)$filter_tahun
+                            ) ?>
+                        </strong>.
+
+                        <?php if (
+                            !empty($activeFilters)
+                        ): ?>
+
+                            <br>
+
+                            Silakan coba ubah atau reset
+                            filter yang digunakan.
+
+                        <?php endif; ?>
 
                     <?php else: ?>
 
-                        Belum ada data assessment skill
-                        yang tersedia.
+                        Belum ada data assessment
+                        skill yang tersedia.
 
                     <?php endif; ?>
 
