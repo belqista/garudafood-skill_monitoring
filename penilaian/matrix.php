@@ -3,18 +3,15 @@
    GARUDAFOOD SKILL MONITORING
    SKILL MATRIX
 
-   STRUKTUR PEKERJA:
-   - id
-   - no_reg
-   - nama
-   - departemen
-   - keterangan
-   - status
-
-   TIDAK MENGGUNAKAN:
-   - id_jabatan
-   - nik
-   - tabel jabatan
+   FITUR:
+   - Filter Tahun
+   - Filter Pekerja
+   - Filter Departemen
+   - Tanpa filter = semua data tetap tampil
+   - Rata-rata nilai per pekerja
+   - Target skill
+   - Gap kompetensi
+   - Responsive / mobile
 ========================================================= */
 
 $page_title = 'Skill Matrix';
@@ -26,22 +23,57 @@ require __DIR__ . '/../partials/header.php';
    PARAMETER FILTER
 ========================================================= */
 
-$year = isset($_GET['tahun'])
+$year = isset($_GET['tahun']) && $_GET['tahun'] !== ''
     ? (int) $_GET['tahun']
-    : (int) date('Y');
+    : 0;
 
-$pid = isset($_GET['pekerja'])
+$pid = isset($_GET['pekerja']) && $_GET['pekerja'] !== ''
     ? (int) $_GET['pekerja']
     : 0;
 
+$departemen = isset($_GET['departemen'])
+    ? trim($_GET['departemen'])
+    : '';
+
 
 /* =========================================================
-   VALIDASI TAHUN
+   JIKA TIDAK ADA TAHUN
+   AMBIL TAHUN TERBARU SEBAGAI DEFAULT
 ========================================================= */
 
 if ($year <= 0) {
-    $year = (int) date('Y');
+
+    $qLatestYear = $conn->query("
+        SELECT MAX(tahun) AS tahun
+        FROM penilaian_skill
+        WHERE tahun IS NOT NULL
+    ");
+
+    if ($qLatestYear) {
+
+        $latestRow =
+            $qLatestYear->fetch_assoc();
+
+        $year =
+            !empty($latestRow['tahun'])
+                ? (int)$latestRow['tahun']
+                : (int)date('Y');
+    } else {
+
+        $year =
+            (int)date('Y');
+    }
 }
+
+
+/* =========================================================
+   ESCAPE FILTER DEPARTEMEN
+========================================================= */
+
+$departemenSafe =
+    $conn->real_escape_string(
+        $departemen
+    );
 
 
 /* =========================================================
@@ -52,8 +84,19 @@ $wherePeople = '';
 
 if ($pid > 0) {
 
-    $wherePeople = ' AND p.id = ' . $pid;
+    $wherePeople .=
+        ' AND p.id = ' . $pid;
+}
 
+
+/* =========================================================
+   FILTER DEPARTEMEN
+========================================================= */
+
+if ($departemen !== '') {
+
+    $wherePeople .=
+        " AND p.departemen = '{$departemenSafe}'";
 }
 
 
@@ -78,7 +121,7 @@ $people = $conn->query("
 
         p.status = 'Aktif'
 
-        $wherePeople
+        {$wherePeople}
 
     ORDER BY
 
@@ -116,23 +159,17 @@ $ss = [];
 
 if ($skills) {
 
-    while ($s = $skills->fetch_assoc()) {
+    while (
+        $s = $skills->fetch_assoc()
+    ) {
 
         $ss[] = $s;
-
     }
-
 }
 
 
 /* =========================================================
    DATA TARGET SKILL
-
-   Struktur:
-   target_skill
-   - id
-   - id_skill
-   - target
 
    Default target = 4
 ========================================================= */
@@ -154,14 +191,14 @@ $qTarget = $conn->query("
 
 if ($qTarget) {
 
-    while ($t = $qTarget->fetch_assoc()) {
+    while (
+        $t = $qTarget->fetch_assoc()
+    ) {
 
         $targets[
-            (int) $t['id_skill']
-        ] = (float) $t['target'];
-
+            (int)$t['id_skill']
+        ] = (float)$t['target'];
     }
-
 }
 
 
@@ -189,7 +226,7 @@ $q = $conn->query("
 
     WHERE
 
-        ps.tahun = $year
+        ps.tahun = {$year}
 
         AND p.status = 'Aktif'
 
@@ -198,13 +235,15 @@ $q = $conn->query("
 
 if ($q) {
 
-    while ($r = $q->fetch_assoc()) {
+    while (
+        $r = $q->fetch_assoc()
+    ) {
 
         $idPekerja =
-            (int) $r['id_pekerja'];
+            (int)$r['id_pekerja'];
 
         $idSkill =
-            (int) $r['id_skill'];
+            (int)$r['id_skill'];
 
 
         $score[
@@ -220,9 +259,7 @@ if ($q) {
                 $r['tahun']
 
         ];
-
     }
-
 }
 
 
@@ -253,6 +290,33 @@ $workerFilter = $conn->query("
 
 
 /* =========================================================
+   DATA DEPARTEMEN UNTUK FILTER
+========================================================= */
+
+$departmentFilter = $conn->query("
+
+    SELECT DISTINCT
+
+        departemen
+
+    FROM pekerja
+
+    WHERE
+
+        status = 'Aktif'
+
+        AND departemen IS NOT NULL
+
+        AND TRIM(departemen) <> ''
+
+    ORDER BY
+
+        departemen ASC
+
+");
+
+
+/* =========================================================
    STATISTIK
 ========================================================= */
 
@@ -263,7 +327,6 @@ if ($people) {
 
     $totalPeople =
         $people->num_rows;
-
 }
 
 
@@ -272,6 +335,10 @@ $totalSkills =
 
 
 $totalAssessment = 0;
+
+$totalScore = 0;
+
+$countScore = 0;
 
 
 if (!empty($score)) {
@@ -300,12 +367,53 @@ if (!empty($score)) {
 
                 $totalAssessment++;
 
+                $totalScore +=
+                    (float)$item['nilai'];
+
+                $countScore++;
             }
-
         }
-
     }
+}
 
+
+/* =========================================================
+   RATA-RATA SEMUA ASSESSMENT
+========================================================= */
+
+$overallAverage = 0;
+
+
+if ($countScore > 0) {
+
+    $overallAverage =
+        $totalScore / $countScore;
+}
+
+
+/* =========================================================
+   QUERY STRING UNTUK RESET / FILTER
+========================================================= */
+
+$currentQuery = [
+
+    'tahun' =>
+        $year
+
+];
+
+
+if ($pid > 0) {
+
+    $currentQuery['pekerja'] =
+        $pid;
+}
+
+
+if ($departemen !== '') {
+
+    $currentQuery['departemen'] =
+        $departemen;
 }
 
 ?>
@@ -335,11 +443,23 @@ if (!empty($score)) {
 
     --gf-bg: #f5f7fb;
 
+    --gf-green: #198754;
+
+    --gf-green-bg: #e9f8f0;
+
+    --gf-yellow: #b77900;
+
+    --gf-yellow-bg: #fff4d8;
+
+    --gf-red: #dc3545;
+
+    --gf-red-bg: #ffecee;
+
 }
 
 
 /* =========================================================
-   HERO BLUE CARD
+   HERO
 ========================================================= */
 
 .dashboard-heading {
@@ -366,14 +486,9 @@ if (!empty($score)) {
 
     box-shadow:
         0 8px 25px
-        rgba(9, 47, 99, .14);
-
+        rgba(9,47,99,.14);
 }
 
-
-/* =========================================================
-   DEKORASI LINGKARAN
-========================================================= */
 
 .dashboard-heading::before {
 
@@ -393,7 +508,6 @@ if (!empty($score)) {
 
     background:
         rgba(255,255,255,.045);
-
 }
 
 
@@ -415,26 +529,16 @@ if (!empty($score)) {
 
     background:
         rgba(255,255,255,.035);
-
 }
 
-
-/* =========================================================
-   ISI HERO
-========================================================= */
 
 .dashboard-heading > * {
 
     position: relative;
 
     z-index: 2;
-
 }
 
-
-/* =========================================================
-   EYEBROW
-========================================================= */
 
 .dashboard-eyebrow {
 
@@ -456,20 +560,8 @@ if (!empty($score)) {
     letter-spacing: .08em;
 
     margin-bottom: 7px;
-
 }
 
-
-.dashboard-eyebrow i {
-
-    font-size: 13px;
-
-}
-
-
-/* =========================================================
-   TITLE
-========================================================= */
 
 .dashboard-title {
 
@@ -482,13 +574,8 @@ if (!empty($score)) {
     font-weight: 800;
 
     color: #ffffff;
-
 }
 
-
-/* =========================================================
-   DESCRIPTION
-========================================================= */
 
 .dashboard-description {
 
@@ -502,19 +589,20 @@ if (!empty($score)) {
     line-height: 1.6;
 
     max-width: 850px;
-
 }
 
 
 /* =========================================================
-   CARD UMUMUM
+   CARD
 ========================================================= */
 
 .cardx {
 
     background: #ffffff;
 
-    border: 1px solid var(--gf-border);
+    border:
+        1px solid
+        var(--gf-border);
 
     border-radius: 17px;
 
@@ -522,20 +610,14 @@ if (!empty($score)) {
 
     box-shadow:
         0 5px 20px
-        rgba(
-            20,
-            43,
-            76,
-            .045
-        );
+        rgba(20,43,76,.045);
 
     margin-bottom: 20px;
-
 }
 
 
 /* =========================================================
-   FORM
+   FILTER
 ========================================================= */
 
 .form-label {
@@ -551,14 +633,14 @@ if (!empty($score)) {
     letter-spacing: .05em;
 
     margin-bottom: 6px;
-
 }
 
 
 .form-control,
 .form-select {
 
-    border-color: #dbe2ef;
+    border-color:
+        #dbe2ef;
 
     border-radius: 9px;
 
@@ -567,7 +649,6 @@ if (!empty($score)) {
     padding: 10px 14px;
 
     color: #2d3748;
-
 }
 
 
@@ -579,19 +660,9 @@ if (!empty($score)) {
 
     box-shadow:
         0 0 0 3px
-        rgba(
-            18,
-            63,
-            122,
-            0.12
-        );
-
+        rgba(18,63,122,.12);
 }
 
-
-/* =========================================================
-   BUTTON PRIMARY
-========================================================= */
 
 .btn-primary {
 
@@ -608,7 +679,6 @@ if (!empty($score)) {
     padding: 10px 20px;
 
     font-size: 13px;
-
 }
 
 
@@ -619,7 +689,67 @@ if (!empty($score)) {
 
     border-color:
         var(--gf-blue-hover) !important;
+}
 
+
+/* =========================================================
+   FILTER ACTIVE INFO
+========================================================= */
+
+.filter-active {
+
+    margin-top: 15px;
+
+    padding-top: 14px;
+
+    border-top:
+        1px solid
+        #edf0f4;
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 7px;
+
+    flex-wrap: wrap;
+}
+
+
+.filter-active-label {
+
+    color:
+        #8a94a4;
+
+    font-size: 10px;
+
+    font-weight: 700;
+
+    text-transform: uppercase;
+}
+
+
+.filter-badge {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    gap: 5px;
+
+    padding: 5px 8px;
+
+    border-radius: 7px;
+
+    background:
+        var(--gf-blue-light);
+
+    color:
+        var(--gf-blue);
+
+    font-size: 10px;
+
+    font-weight: 700;
 }
 
 
@@ -631,12 +761,15 @@ if (!empty($score)) {
 
     background: #ffffff;
 
-    border: 1px solid var(--gf-border);
+    border:
+        1px solid
+        var(--gf-border);
 
     border-radius: 13px;
 
     padding: 13px 15px;
 
+    height: 100%;
 }
 
 
@@ -651,7 +784,6 @@ if (!empty($score)) {
     text-transform: uppercase;
 
     letter-spacing: .04em;
-
 }
 
 
@@ -664,12 +796,24 @@ if (!empty($score)) {
     font-weight: 800;
 
     margin-top: 2px;
+}
 
+
+.matrix-stat-sub {
+
+    color:
+        #9aa3af;
+
+    font-size:
+        9px;
+
+    margin-top:
+        2px;
 }
 
 
 /* =========================================================
-   TITLE CARD
+   TITLE
 ========================================================= */
 
 .card-title-custom {
@@ -681,7 +825,6 @@ if (!empty($score)) {
     font-weight: 750;
 
     margin-bottom: 5px;
-
 }
 
 
@@ -690,7 +833,6 @@ if (!empty($score)) {
     color: #8a94a4;
 
     font-size: 12px;
-
 }
 
 
@@ -710,10 +852,12 @@ if (!empty($score)) {
 
     border-radius: 12px;
 
-    border: 1px solid #e3e8ef;
+    border:
+        1px solid
+        #e3e8ef;
 
-    -webkit-overflow-scrolling: touch;
-
+    -webkit-overflow-scrolling:
+        touch;
 }
 
 
@@ -727,32 +871,39 @@ if (!empty($score)) {
 
     white-space: nowrap;
 
-    border-collapse: separate;
+    border-collapse:
+        separate;
 
     border-spacing: 0;
-
 }
 
 
 /* =========================================================
-   HEADER TABLE
+   HEADER
 ========================================================= */
 
 .matrix th {
 
-    background: #fafbfd;
+    background:
+        #fafbfd;
 
-    color: #7d8796;
+    color:
+        #7d8796;
 
-    font-size: 11px;
+    font-size:
+        10px;
 
-    font-weight: 750;
+    font-weight:
+        750;
 
-    text-transform: uppercase;
+    text-transform:
+        uppercase;
 
-    letter-spacing: .05em;
+    letter-spacing:
+        .04em;
 
-    padding: 12px 14px;
+    padding:
+        11px 10px;
 
     border-bottom:
         1px solid #e3e8ef;
@@ -760,10 +911,11 @@ if (!empty($score)) {
     border-right:
         1px solid #edf0f4;
 
-    vertical-align: middle;
+    vertical-align:
+        middle;
 
-    text-align: center;
-
+    text-align:
+        center;
 }
 
 
@@ -774,36 +926,88 @@ if (!empty($score)) {
 .matrix th:first-child,
 .matrix td:first-child {
 
-    position: sticky;
+    position:
+        sticky;
 
-    left: 0;
+    left:
+        0;
 
-    background: #ffffff;
+    background:
+        #ffffff;
 
-    z-index: 2;
+    z-index:
+        2;
 
-    text-align: left;
+    text-align:
+        left;
 
-    min-width: 250px;
+    min-width:
+        240px;
+
+    width:
+        240px;
 
     box-shadow:
         2px 0 5px
-        rgba(
-            0,
-            0,
-            0,
-            0.02
-        );
-
+        rgba(0,0,0,.02);
 }
 
 
 .matrix th:first-child {
 
-    z-index: 3;
+    z-index:
+        4;
 
-    background: #fafbfd;
+    background:
+        #fafbfd;
+}
 
+
+/* =========================================================
+   KOLOM RATA-RATA
+========================================================= */
+
+.matrix th:nth-child(2),
+.matrix td:nth-child(2) {
+
+    min-width:
+        100px;
+
+    width:
+        100px;
+
+    position:
+        sticky;
+
+    left:
+        240px;
+
+    z-index:
+        2;
+
+    background:
+        #ffffff;
+
+    box-shadow:
+        2px 0 5px
+        rgba(0,0,0,.025);
+}
+
+
+.matrix th:nth-child(2) {
+
+    z-index:
+        4;
+
+    background:
+        #fafbfd;
+}
+
+
+.matrix tbody tr:hover td:nth-child(2) {
+
+    background:
+        #fafbfd;
 }
 
 
@@ -813,9 +1017,11 @@ if (!empty($score)) {
 
 .matrix td {
 
-    padding: 12px 14px;
+    padding:
+        11px 10px;
 
-    font-size: 12px;
+    font-size:
+        11px;
 
     border-bottom:
         1px solid #edf0f4;
@@ -823,122 +1029,218 @@ if (!empty($score)) {
     border-right:
         1px solid #edf0f4;
 
-    vertical-align: middle;
+    vertical-align:
+        middle;
 
-    text-align: center;
+    text-align:
+        center;
 
-    color: #384457;
-
+    color:
+        #384457;
 }
 
 
 .matrix tbody tr:hover td {
 
-    background: #fafbfd;
-
+    background:
+        #fafbfd;
 }
 
 
 .matrix tbody tr:hover td:first-child {
 
-    background: #fafbfd;
-
+    background:
+        #fafbfd;
 }
 
 
 /* =========================================================
-   PEKERJA
+   WORKER
 ========================================================= */
 
 .worker-name {
 
-    color: #172033;
+    color:
+        #172033;
 
-    font-size: 13px;
+    font-size:
+        12px;
 
-    font-weight: 700;
-
+    font-weight:
+        700;
 }
 
 
 .worker-meta {
 
-    color: #8a94a4;
+    color:
+        #8a94a4;
 
-    font-size: 10px;
+    font-size:
+        9px;
 
-    margin-top: 3px;
+    margin-top:
+        3px;
 
+    line-height:
+        1.4;
 }
 
 
 .worker-dept {
 
-    color: #123f7a;
+    color:
+        #123f7a;
 
-    font-weight: 600;
-
+    font-weight:
+        600;
 }
 
 
 /* =========================================================
-   SCORE BADGE
+   AVERAGE
+========================================================= */
+
+.average-badge {
+
+    display:
+        inline-flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        center;
+
+    min-width:
+        52px;
+
+    height:
+        32px;
+
+    padding:
+        0 8px;
+
+    border-radius:
+        8px;
+
+    font-size:
+        12px;
+
+    font-weight:
+        800;
+}
+
+
+.average-good {
+
+    background:
+        #e9f8f0;
+
+    color:
+        #198754;
+}
+
+
+.average-mid {
+
+    background:
+        #fff4d8;
+
+    color:
+        #b77900;
+}
+
+
+.average-bad {
+
+    background:
+        #ffecee;
+
+    color:
+        #dc3545;
+}
+
+
+.average-empty {
+
+    background:
+        #f1f3f5;
+
+    color:
+        #adb5bd;
+}
+
+
+/* =========================================================
+   SCORE
 ========================================================= */
 
 .score-badge {
 
-    display: inline-flex;
+    display:
+        inline-flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    justify-content: center;
+    justify-content:
+        center;
 
-    width: 32px;
+    width:
+        31px;
 
-    height: 32px;
+    height:
+        31px;
 
-    border-radius: 8px;
+    border-radius:
+        8px;
 
-    font-weight: 750;
+    font-weight:
+        750;
 
-    font-size: 12px;
-
+    font-size:
+        11px;
 }
 
 
 .score-5 {
 
-    background: #e9f8f0;
+    background:
+        #e9f8f0;
 
-    color: #198754;
-
+    color:
+        #198754;
 }
 
 
 .score-3 {
 
-    background: #fff4d8;
+    background:
+        #fff4d8;
 
-    color: #b77900;
-
+    color:
+        #b77900;
 }
 
 
 .score-1 {
 
-    background: #ffecee;
+    background:
+        #ffecee;
 
-    color: #dc3545;
-
+    color:
+        #dc3545;
 }
 
 
 .score-dash {
 
-    background: #f1f3f5;
+    background:
+        #f1f3f5;
 
-    color: #adb5bd;
-
+    color:
+        #adb5bd;
 }
 
 
@@ -948,12 +1250,14 @@ if (!empty($score)) {
 
 .gap-text {
 
-    font-size: 9px;
+    font-size:
+        8px;
 
-    font-weight: 700;
+    font-weight:
+        700;
 
-    margin-top: 2px;
-
+    margin-top:
+        2px;
 }
 
 
@@ -963,47 +1267,56 @@ if (!empty($score)) {
 
 .legend-badge {
 
-    display: inline-flex;
+    display:
+        inline-flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    gap: 5px;
+    gap:
+        5px;
 
-    border-radius: 20px;
+    border-radius:
+        20px;
 
-    padding: 5px 9px;
+    padding:
+        5px 9px;
 
-    font-size: 10px;
+    font-size:
+        10px;
 
-    font-weight: 700;
-
+    font-weight:
+        700;
 }
 
 
 .legend-green {
 
-    background: #e9f8f0;
+    background:
+        #e9f8f0;
 
-    color: #198754;
-
+    color:
+        #198754;
 }
 
 
 .legend-yellow {
 
-    background: #fff4d8;
+    background:
+        #fff4d8;
 
-    color: #a86b00;
-
+    color:
+        #a86b00;
 }
 
 
 .legend-red {
 
-    background: #ffecee;
+    background:
+        #ffecee;
 
-    color: #dc3545;
-
+    color:
+        #dc3545;
 }
 
 
@@ -1013,17 +1326,18 @@ if (!empty($score)) {
 
 .target-info {
 
-    color: #8a94a4;
+    color:
+        #8a94a4;
 
-    font-size: 11px;
-
+    font-size:
+        11px;
 }
 
 
 .target-info strong {
 
-    color: #123f7a;
-
+    color:
+        #123f7a;
 }
 
 
@@ -1033,525 +1347,504 @@ if (!empty($score)) {
 
 .matrix-empty {
 
-    padding: 45px 20px;
+    padding:
+        45px 20px;
 
-    text-align: center;
+    text-align:
+        center;
 
-    color: #788396;
-
+    color:
+        #788396;
 }
 
 
 .matrix-empty-icon {
 
-    width: 55px;
+    width:
+        55px;
 
-    height: 55px;
+    height:
+        55px;
 
-    border-radius: 50%;
+    border-radius:
+        50%;
 
-    display: flex;
+    display:
+        flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    justify-content: center;
+    justify-content:
+        center;
 
     margin:
         0 auto 12px;
 
-    background: #f1f3f5;
+    background:
+        #f1f3f5;
 
-    color: #9aa4b2;
+    color:
+        #9aa4b2;
 
-    font-size: 23px;
-
+    font-size:
+        23px;
 }
 
 
 /* =========================================================
-   RESPONSIVE TABLET
+   MOBILE
 ========================================================= */
 
 @media (max-width: 768px) {
 
     .dashboard-heading {
 
-        padding: 22px 20px;
+        padding:
+            22px 20px;
 
-        min-height: 135px;
+        min-height:
+            135px;
 
-        border-radius: 15px;
-
+        border-radius:
+            15px;
     }
 
 
     .dashboard-title {
 
-        font-size: 23px;
-
+        font-size:
+            23px;
     }
 
 
     .dashboard-description {
 
-        font-size: 12px;
-
-        max-width: 100%;
-
+        font-size:
+            12px;
     }
 
 
     .cardx {
 
-        padding: 16px;
-
+        padding:
+            16px;
     }
 
 
-    /* =====================================================
-       MATRIX MOBILE
-    ===================================================== */
-
     .matrix-wrap {
 
-        margin-top: 10px;
+        margin-top:
+            10px;
 
-        border-radius: 9px;
+        border-radius:
+            9px;
 
-        width: 100%;
+        width:
+            100%;
 
-        max-width: 100%;
+        max-width:
+            100%;
 
-        overflow-x: auto;
-
-        overflow-y: hidden;
-
+        overflow-x:
+            auto;
     }
 
 
     .matrix {
 
-        width: max-content;
+        width:
+            max-content;
 
-        min-width: 100%;
+        min-width:
+            100%;
 
-        table-layout: fixed;
-
-    }
-
-
-    /* KOLOM PEKERJA */
-
-    .matrix th:first-child,
-    .matrix td:first-child {
-
-        min-width: 145px;
-
-        width: 145px;
-
-        max-width: 145px;
-
-        padding: 7px 8px;
-
-    }
-
-
-    /* KOLOM SKILL */
-
-    .matrix th:not(:first-child),
-    .matrix td:not(:first-child) {
-
-        min-width: 60px;
-
-        width: 60px;
-
-        max-width: 60px;
-
-        padding: 6px 4px;
-
-    }
-
-
-    /* HEADER SKILL */
-
-    .matrix th {
-
-        font-size: 8px;
-
-        line-height: 1.25;
-
-        letter-spacing: .02em;
-
-        padding: 7px 4px;
-
-        white-space: normal;
-
-        word-break: break-word;
-
-        overflow-wrap: anywhere;
-
-    }
-
-
-    /* TARGET DI HEADER */
-
-    .matrix th div {
-
-        font-size: 7px !important;
-
-        line-height: 1.2;
-
-        margin-top: 2px !important;
-
-    }
-
-
-    /* CELL */
-
-    .matrix td {
-
-        font-size: 9px;
-
-        line-height: 1.25;
-
-        padding: 6px 4px;
-
+        table-layout:
+            fixed;
     }
 
 
     /* PEKERJA */
 
+    .matrix th:first-child,
+    .matrix td:first-child {
+
+        min-width:
+            145px;
+
+        width:
+            145px;
+
+        max-width:
+            145px;
+
+        padding:
+            7px 8px;
+    }
+
+
+    /* RATA-RATA */
+
+    .matrix th:nth-child(2),
+    .matrix td:nth-child(2) {
+
+        min-width:
+            70px;
+
+        width:
+            70px;
+
+        max-width:
+            70px;
+
+        left:
+            145px;
+
+        padding:
+            6px 4px;
+    }
+
+
+    /* SKILL */
+
+    .matrix th:nth-child(n+3),
+    .matrix td:nth-child(n+3) {
+
+        min-width:
+            60px;
+
+        width:
+            60px;
+
+        max-width:
+            60px;
+
+        padding:
+            6px 4px;
+    }
+
+
+    .matrix th {
+
+        font-size:
+            8px;
+
+        line-height:
+            1.25;
+
+        padding:
+            7px 4px;
+
+        white-space:
+            normal;
+
+        word-break:
+            break-word;
+
+        overflow-wrap:
+            anywhere;
+    }
+
+
+    .matrix th div {
+
+        font-size:
+            7px !important;
+    }
+
+
+    .matrix td {
+
+        font-size:
+            9px;
+
+        padding:
+            6px 4px;
+    }
+
+
     .worker-name {
 
-        font-size: 10px;
+        font-size:
+            10px;
 
-        line-height: 1.25;
+        line-height:
+            1.25;
 
-        white-space: normal;
+        white-space:
+            normal;
 
-        word-break: break-word;
-
+        word-break:
+            break-word;
     }
 
 
     .worker-meta {
 
-        font-size: 7.5px;
-
-        line-height: 1.3;
-
-        margin-top: 2px;
-
-        white-space: normal;
-
-        word-break: break-word;
-
+        font-size:
+            7.5px;
     }
 
 
     .worker-dept {
 
-        font-size: 7.5px;
-
+        font-size:
+            7.5px;
     }
 
 
-    /* SCORE */
+    .average-badge {
+
+        min-width:
+            38px;
+
+        height:
+            25px;
+
+        border-radius:
+            6px;
+
+        font-size:
+            9px;
+    }
+
 
     .score-badge {
 
-        width: 25px;
+        width:
+            25px;
 
-        height: 25px;
+        height:
+            25px;
 
-        min-width: 25px;
+        min-width:
+            25px;
 
-        border-radius: 6px;
+        border-radius:
+            6px;
 
-        font-size: 9px;
-
-        font-weight: 800;
-
+        font-size:
+            9px;
     }
 
-
-    /* GAP */
 
     .gap-text {
 
-        font-size: 7px;
-
-        line-height: 1.1;
-
-        margin-top: 1px;
-
-    }
-
-
-    /* OK */
-
-    .matrix td div > span[style] {
-
-        font-size: 7px !important;
-
-        margin-top: 1px !important;
-
+        font-size:
+            7px;
     }
 
 }
 
 
 /* =========================================================
-   RESPONSIVE HP KECIL
+   HP KECIL
 ========================================================= */
 
 @media (max-width: 520px) {
 
     .dashboard-heading {
 
-        padding: 18px 16px;
+        padding:
+            18px 16px;
 
-        min-height: 120px;
+        min-height:
+            120px;
 
-        margin-bottom: 15px;
-
+        margin-bottom:
+            15px;
     }
 
 
     .dashboard-eyebrow {
 
-        font-size: 9px;
-
-        gap: 5px;
-
+        font-size:
+            9px;
     }
 
 
     .dashboard-title {
 
-        font-size: 20px;
-
+        font-size:
+            20px;
     }
 
 
     .dashboard-description {
 
-        font-size: 10px;
+        font-size:
+            10px;
 
-        line-height: 1.45;
-
-        margin-top: 6px;
-
+        line-height:
+            1.45;
     }
 
 
     .cardx {
 
-        padding: 12px;
+        padding:
+            12px;
 
-        border-radius: 13px;
-
+        border-radius:
+            13px;
     }
 
-
-    /* =====================================================
-       TABLE SUPER COMPACT
-    ===================================================== */
-
-    .matrix-wrap {
-
-        margin-left: 0;
-
-        margin-right: 0;
-
-        width: 100%;
-
-        border-radius: 8px;
-
-    }
-
-
-    .matrix {
-
-        width: max-content;
-
-        min-width: 100%;
-
-        table-layout: fixed;
-
-    }
-
-
-    /* PEKERJA 130PX */
 
     .matrix th:first-child,
     .matrix td:first-child {
 
-        min-width: 130px;
+        min-width:
+            130px;
 
-        width: 130px;
+        width:
+            130px;
 
-        max-width: 130px;
+        max-width:
+            130px;
 
-        padding: 6px 7px;
-
+        padding:
+            6px 7px;
     }
 
 
-    /* SKILL 55PX */
+    .matrix th:nth-child(2),
+    .matrix td:nth-child(2) {
 
-    .matrix th:not(:first-child),
-    .matrix td:not(:first-child) {
+        min-width:
+            65px;
 
-        min-width: 55px;
+        width:
+            65px;
 
-        width: 55px;
+        max-width:
+            65px;
 
-        max-width: 55px;
+        left:
+            130px;
 
-        padding: 5px 3px;
-
+        padding:
+            5px 3px;
     }
 
 
-    /* HEADER */
+    .matrix th:nth-child(n+3),
+    .matrix td:nth-child(n+3) {
+
+        min-width:
+            55px;
+
+        width:
+            55px;
+
+        max-width:
+            55px;
+
+        padding:
+            5px 3px;
+    }
+
 
     .matrix th {
 
-        font-size: 7px;
+        font-size:
+            7px;
 
-        line-height: 1.2;
-
-        padding: 6px 3px;
-
+        padding:
+            6px 3px;
     }
 
 
     .matrix th div {
 
-        font-size: 6.5px !important;
-
-        line-height: 1.15;
-
+        font-size:
+            6.5px !important;
     }
 
-
-    /* CELL */
 
     .matrix td {
 
-        font-size: 8px;
+        font-size:
+            8px;
 
-        padding: 5px 3px;
-
+        padding:
+            5px 3px;
     }
 
 
-    /* NAMA PEKERJA */
-
     .worker-name {
 
-        font-size: 9px;
-
-        line-height: 1.2;
-
+        font-size:
+            9px;
     }
 
 
     .worker-meta {
 
-        font-size: 6.8px;
-
-        line-height: 1.25;
-
+        font-size:
+            6.8px;
     }
 
 
     .worker-dept {
 
-        font-size: 6.8px;
-
+        font-size:
+            6.8px;
     }
 
 
-    /* SCORE */
+    .average-badge {
+
+        min-width:
+            34px;
+
+        height:
+            23px;
+
+        font-size:
+            8px;
+    }
+
 
     .score-badge {
 
-        width: 23px;
+        width:
+            23px;
 
-        height: 23px;
+        height:
+            23px;
 
-        min-width: 23px;
+        min-width:
+            23px;
 
-        border-radius: 5px;
+        border-radius:
+            5px;
 
-        font-size: 8px;
-
+        font-size:
+            8px;
     }
 
 
     .gap-text {
 
-        font-size: 6.5px;
-
-    }
-
-
-    .matrix td div > span[style] {
-
-        font-size: 6.5px !important;
-
-    }
-
-
-    /* =====================================================
-       MATRIX HEADER AREA
-    ===================================================== */
-
-    .card-title-custom {
-
-        font-size: 13px;
-
-    }
-
-
-    .section-note {
-
-        font-size: 9px;
-
-    }
-
-
-    .target-info {
-
-        font-size: 8px;
-
-        line-height: 1.4;
-
+        font-size:
+            6.5px;
     }
 
 
     .legend-badge {
 
-        padding: 4px 6px;
+        padding:
+            4px 6px;
 
-        font-size: 8px;
-
-    }
-
-
-    .legend-badge i {
-
-        font-size: 8px;
-
+        font-size:
+            8px;
     }
 
 }
 
 
 /* =========================================================
-   EXTRA SMALL PHONE
+   EXTRA SMALL
 ========================================================= */
 
 @media (max-width: 380px) {
@@ -1559,83 +1852,102 @@ if (!empty($score)) {
     .matrix th:first-child,
     .matrix td:first-child {
 
-        min-width: 120px;
+        min-width:
+            120px;
 
-        width: 120px;
+        width:
+            120px;
 
-        max-width: 120px;
-
-        padding: 5px 6px;
-
+        max-width:
+            120px;
     }
 
 
-    .matrix th:not(:first-child),
-    .matrix td:not(:first-child) {
+    .matrix th:nth-child(2),
+    .matrix td:nth-child(2) {
 
-        min-width: 50px;
+        min-width:
+            60px;
 
-        width: 50px;
+        width:
+            60px;
 
-        max-width: 50px;
+        max-width:
+            60px;
 
-        padding: 4px 2px;
+        left:
+            120px;
+    }
 
+
+    .matrix th:nth-child(n+3),
+    .matrix td:nth-child(n+3) {
+
+        min-width:
+            50px;
+
+        width:
+            50px;
+
+        max-width:
+            50px;
     }
 
 
     .matrix th {
 
-        font-size: 6.5px;
-
+        font-size:
+            6.5px;
     }
 
 
     .matrix td {
 
-        font-size: 7.5px;
-
+        font-size:
+            7.5px;
     }
 
 
     .worker-name {
 
-        font-size: 8.5px;
-
+        font-size:
+            8.5px;
     }
 
 
     .worker-meta {
 
-        font-size: 6.3px;
-
+        font-size:
+            6.3px;
     }
 
 
-    .worker-dept {
+    .average-badge {
 
-        font-size: 6.3px;
+        min-width:
+            32px;
 
+        height:
+            21px;
+
+        font-size:
+            7.5px;
     }
 
 
     .score-badge {
 
-        width: 21px;
+        width:
+            21px;
 
-        height: 21px;
+        height:
+            21px;
 
-        min-width: 21px;
+        min-width:
+            21px;
 
-        font-size: 7.5px;
-
-    }
-
-
-    .gap-text {
-
-        font-size: 6px;
-
+        font-size:
+            7.5px;
     }
 
 }
@@ -1644,11 +1956,10 @@ if (!empty($score)) {
 
 
 <!-- =========================================================
-     HEADER HALAMAN
+     HERO
 ========================================================= -->
 
 <div class="dashboard-heading">
-
 
     <div class="dashboard-eyebrow">
 
@@ -1669,10 +1980,9 @@ if (!empty($score)) {
     <div class="dashboard-description">
 
         Matriks kompetensi dan pemetaan tingkat keahlian
-        pekerja berdasarkan tahun assessment.
+        pekerja berdasarkan hasil assessment.
 
     </div>
-
 
 </div>
 
@@ -1689,9 +1999,11 @@ if (!empty($score)) {
     >
 
 
-        <!-- TAHUN -->
+        <!-- ================================================
+             TAHUN
+        ================================================= -->
 
-        <div class="col-md-3">
+        <div class="col-lg-3 col-md-6">
 
             <label class="form-label">
 
@@ -1732,9 +2044,7 @@ if (!empty($score)) {
 
                         $years[] =
                             (int)$yr['tahun'];
-
                     }
-
                 }
 
 
@@ -1751,7 +2061,6 @@ if (!empty($score)) {
 
                     $years[] =
                         $currentYear;
-
                 }
 
 
@@ -1764,19 +2073,18 @@ if (!empty($score)) {
 
                     $years[] =
                         $year;
-
                 }
 
 
                 sort($years);
 
+                ?>
 
-                foreach (
+
+                <?php foreach (
                     $years
                     as $y
-                ):
-
-                ?>
+                ): ?>
 
                     <option
                         value="<?= $y ?>"
@@ -1797,9 +2105,75 @@ if (!empty($score)) {
         </div>
 
 
-        <!-- PEKERJA -->
+        <!-- ================================================
+             DEPARTEMEN
+        ================================================= -->
 
-        <div class="col-md-5">
+        <div class="col-lg-3 col-md-6">
+
+            <label class="form-label">
+
+                Departemen
+
+            </label>
+
+
+            <select
+                name="departemen"
+                class="form-select"
+            >
+
+                <option value="">
+
+                    -- Semua Departemen --
+
+                </option>
+
+
+                <?php if (
+                    $departmentFilter
+                ): ?>
+
+
+                    <?php while (
+                        $df =
+                        $departmentFilter->fetch_assoc()
+                    ): ?>
+
+
+                        <option
+                            value="<?= e(
+                                $df['departemen']
+                            ) ?>"
+                            <?= $departemen ===
+                                $df['departemen']
+                                    ? 'selected'
+                                    : ''
+                            ?>
+                        >
+
+                            <?= e(
+                                $df['departemen']
+                            ) ?>
+
+                        </option>
+
+
+                    <?php endwhile; ?>
+
+
+                <?php endif; ?>
+
+            </select>
+
+        </div>
+
+
+        <!-- ================================================
+             PEKERJA
+        ================================================= -->
+
+        <div class="col-lg-4 col-md-6">
 
             <label class="form-label">
 
@@ -1824,10 +2198,12 @@ if (!empty($score)) {
                     $workerFilter
                 ): ?>
 
+
                     <?php while (
                         $wf =
                         $workerFilter->fetch_assoc()
                     ): ?>
+
 
                         <option
                             value="<?= (int)$wf['id'] ?>"
@@ -1872,7 +2248,9 @@ if (!empty($score)) {
 
                         </option>
 
+
                     <?php endwhile; ?>
+
 
                 <?php endif; ?>
 
@@ -1881,24 +2259,133 @@ if (!empty($score)) {
         </div>
 
 
-        <!-- BUTTON -->
+        <!-- ================================================
+             BUTTON
+        ================================================= -->
 
-        <div class="col-auto">
+        <div class="col-lg-2 col-md-6">
 
             <button
                 type="submit"
-                class="btn btn-primary"
+                class="
+                    btn
+                    btn-primary
+                    w-100
+                "
             >
 
                 <i
-                    class="bi bi-filter me-1"
+                    class="
+                        bi
+                        bi-filter
+                        me-1
+                    "
                 ></i>
 
-                Tampilkan Matrix
+                Tampilkan
 
             </button>
 
         </div>
+
+
+    </form>
+
+
+    <!-- =====================================================
+         FILTER AKTIF
+    ====================================================== -->
+
+    <div class="filter-active">
+
+        <span
+            class="
+                filter-active-label
+            "
+        >
+
+            Filter aktif:
+
+        </span>
+
+
+        <!-- TAHUN -->
+
+        <span class="filter-badge">
+
+            <i class="bi bi-calendar3"></i>
+
+            Tahun <?= e($year) ?>
+
+        </span>
+
+
+        <!-- DEPARTEMEN -->
+
+        <?php if (
+            $departemen !== ''
+        ): ?>
+
+            <span class="filter-badge">
+
+                <i class="bi bi-building"></i>
+
+                <?= e($departemen) ?>
+
+            </span>
+
+        <?php else: ?>
+
+            <span
+                class="filter-badge"
+                style="
+                    background:#f1f3f5;
+                    color:#6c757d;
+                "
+            >
+
+                <i class="bi bi-building"></i>
+
+                Semua Departemen
+
+            </span>
+
+        <?php endif; ?>
+
+
+        <!-- PEKERJA -->
+
+        <?php if (
+            $pid > 0
+        ): ?>
+
+            <span
+                class="filter-badge"
+            >
+
+                <i class="bi bi-person"></i>
+
+                Pekerja dipilih
+
+            </span>
+
+        <?php else: ?>
+
+            <span
+                class="filter-badge"
+                style="
+                    background:#f1f3f5;
+                    color:#6c757d;
+                "
+            >
+
+                <i class="bi bi-people"></i>
+
+                Semua Pekerja
+
+            </span>
+
+        <?php endif; ?>
 
 
         <!-- RESET -->
@@ -1906,39 +2393,37 @@ if (!empty($score)) {
         <?php if (
             $pid > 0
             ||
+            $departemen !== ''
+            ||
             isset($_GET['tahun'])
         ): ?>
 
-            <div class="col-auto">
+            <a
+                href="matrix.php"
+                class="
+                    filter-badge
+                    text-decoration-none
+                "
+                style="
+                    background:#ffecee;
+                    color:#dc3545;
+                "
+            >
 
-                <a
-                    href="matrix.php"
-                    class="btn btn-light border"
-                    style="
-                        border-radius:9px;
-                        padding:10px 16px;
-                        font-size:13px;
+                <i
+                    class="
+                        bi
+                        bi-x-circle
                     "
-                >
+                ></i>
 
-                    <i
-                        class="
-                            bi
-                            bi-arrow-counterclockwise
-                            me-1
-                        "
-                    ></i>
+                Reset
 
-                    Reset
-
-                </a>
-
-            </div>
+            </a>
 
         <?php endif; ?>
 
-
-    </form>
+    </div>
 
 </div>
 
@@ -1952,13 +2437,13 @@ if (!empty($score)) {
 
     <!-- PEKERJA -->
 
-    <div class="col-md-4">
+    <div class="col-6 col-lg-3">
 
         <div class="matrix-stat">
 
             <div class="matrix-stat-label">
 
-                Pekerja Aktif
+                Pekerja Ditampilkan
 
             </div>
 
@@ -1971,6 +2456,13 @@ if (!empty($score)) {
 
             </div>
 
+
+            <div class="matrix-stat-sub">
+
+                Sesuai filter
+
+            </div>
+
         </div>
 
     </div>
@@ -1978,7 +2470,7 @@ if (!empty($score)) {
 
     <!-- SKILL -->
 
-    <div class="col-md-4">
+    <div class="col-6 col-lg-3">
 
         <div class="matrix-stat">
 
@@ -1997,6 +2489,13 @@ if (!empty($score)) {
 
             </div>
 
+
+            <div class="matrix-stat-sub">
+
+                Skill aktif
+
+            </div>
+
         </div>
 
     </div>
@@ -2004,14 +2503,13 @@ if (!empty($score)) {
 
     <!-- ASSESSMENT -->
 
-    <div class="col-md-4">
+    <div class="col-6 col-lg-3">
 
         <div class="matrix-stat">
 
             <div class="matrix-stat-label">
 
                 Assessment Terisi
-                Tahun <?= e($year) ?>
 
             </div>
 
@@ -2021,6 +2519,52 @@ if (!empty($score)) {
                 <?= number_format(
                     $totalAssessment
                 ) ?>
+
+            </div>
+
+
+            <div class="matrix-stat-sub">
+
+                Tahun <?= e($year) ?>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- RATA-RATA -->
+
+    <div class="col-6 col-lg-3">
+
+        <div class="matrix-stat">
+
+            <div class="matrix-stat-label">
+
+                Rata-rata Nilai
+
+            </div>
+
+
+            <div class="matrix-stat-value">
+
+                <?= $countScore > 0
+                    ? number_format(
+                        $overallAverage,
+                        2,
+                        ',',
+                        '.'
+                    )
+                    : '-'
+                ?>
+
+            </div>
+
+
+            <div class="matrix-stat-sub">
+
+                Semua assessment terisi
 
             </div>
 
@@ -2039,7 +2583,7 @@ if (!empty($score)) {
 <div class="cardx">
 
 
-    <!-- HEADER MATRIX -->
+    <!-- HEADER -->
 
     <div
         class="
@@ -2065,8 +2609,8 @@ if (!empty($score)) {
 
             <div class="section-note">
 
-                Nilai dibandingkan dengan
-                target masing-masing skill.
+                Nilai setiap skill dibandingkan
+                dengan target skill masing-masing.
 
             </div>
 
@@ -2082,9 +2626,6 @@ if (!empty($score)) {
                 flex-wrap
             "
         >
-
-
-            <!-- KOMPETEN -->
 
             <span
                 class="
@@ -2105,8 +2646,6 @@ if (!empty($score)) {
             </span>
 
 
-            <!-- PENINGKATAN -->
-
             <span
                 class="
                     legend-badge
@@ -2126,8 +2665,6 @@ if (!empty($score)) {
             </span>
 
 
-            <!-- TRAINING -->
-
             <span
                 class="
                     legend-badge
@@ -2146,9 +2683,7 @@ if (!empty($score)) {
 
             </span>
 
-
         </div>
-
 
     </div>
 
@@ -2177,7 +2712,7 @@ if (!empty($score)) {
 
 
     <!-- =====================================================
-         TABLE
+         MATRIX TABLE
     ====================================================== -->
 
     <div class="matrix-wrap">
@@ -2186,7 +2721,7 @@ if (!empty($score)) {
 
 
             <!-- =================================================
-                 HEADER TABLE
+                 HEADER
             ================================================== -->
 
             <thead>
@@ -2199,6 +2734,15 @@ if (!empty($score)) {
                 <th>
 
                     Pekerja
+
+                </th>
+
+
+                <!-- RATA-RATA -->
+
+                <th>
+
+                    Rata-rata
 
                 </th>
 
@@ -2231,7 +2775,7 @@ if (!empty($score)) {
 
                         <div
                             style="
-                                font-size:9px;
+                                font-size:8px;
                                 color:#a0a8b5;
                                 margin-top:3px;
                                 text-transform:none;
@@ -2247,7 +2791,6 @@ if (!empty($score)) {
                             ) ?>
 
                         </div>
-
 
                     </th>
 
@@ -2280,6 +2823,98 @@ if (!empty($score)) {
                 ): ?>
 
 
+                    <?php
+
+                    /* =========================================
+                       HITUNG RATA-RATA PEKERJA
+                    ========================================== */
+
+                    $workerId =
+                        (int)$p['id'];
+
+                    $workerTotal =
+                        0;
+
+                    $workerCount =
+                        0;
+
+
+                    if (
+                        isset(
+                            $score[$workerId]
+                        )
+                    ) {
+
+                        foreach (
+                            $score[$workerId]
+                            as $workerScore
+                        ) {
+
+                            if (
+
+                                isset(
+                                    $workerScore['nilai']
+                                )
+
+                                &&
+
+                                $workerScore['nilai'] !== null
+
+                                &&
+
+                                $workerScore['nilai'] !== ''
+
+                            ) {
+
+                                $workerTotal +=
+                                    (float)$workerScore['nilai'];
+
+                                $workerCount++;
+                            }
+                        }
+                    }
+
+
+                    $workerAverage =
+                        $workerCount > 0
+                            ? $workerTotal / $workerCount
+                            : null;
+
+
+                    /* =========================================
+                       CLASS RATA-RATA
+                    ========================================== */
+
+                    if (
+                        $workerAverage === null
+                    ) {
+
+                        $averageClass =
+                            'average-empty';
+
+                    } elseif (
+                        $workerAverage >= 4
+                    ) {
+
+                        $averageClass =
+                            'average-good';
+
+                    } elseif (
+                        $workerAverage >= 3
+                    ) {
+
+                        $averageClass =
+                            'average-mid';
+
+                    } else {
+
+                        $averageClass =
+                            'average-bad';
+                    }
+
+                    ?>
+
+
                     <tr>
 
 
@@ -2289,8 +2924,6 @@ if (!empty($score)) {
 
                         <td>
 
-
-                            <!-- NAMA -->
 
                             <div
                                 class="worker-name"
@@ -2302,8 +2935,6 @@ if (!empty($score)) {
 
                             </div>
 
-
-                            <!-- META -->
 
                             <div
                                 class="worker-meta"
@@ -2368,8 +2999,6 @@ if (!empty($score)) {
                             </div>
 
 
-                            <!-- KETERANGAN -->
-
                             <?php if (
                                 !empty(
                                     $p['keterangan']
@@ -2401,6 +3030,90 @@ if (!empty($score)) {
 
 
                         <!-- =====================================
+                             RATA-RATA
+                        ====================================== -->
+
+                        <td>
+
+
+                            <?php if (
+                                $workerAverage !== null
+                            ): ?>
+
+
+                                <span
+                                    class="
+                                        average-badge
+                                        <?= $averageClass ?>
+                                    "
+                                    title="
+                                        Rata-rata
+                                        dari
+                                        <?= $workerCount ?>
+                                        assessment
+                                    "
+                                >
+
+                                    <?= number_format(
+                                        $workerAverage,
+                                        2,
+                                        ',',
+                                        '.'
+                                    ) ?>
+
+                                </span>
+
+
+                                <div
+                                    style="
+                                        font-size:8px;
+                                        color:#9aa3af;
+                                        margin-top:3px;
+                                    "
+                                >
+
+                                    <?= $workerCount ?>
+
+                                    nilai
+
+                                </div>
+
+
+                            <?php else: ?>
+
+
+                                <span
+                                    class="
+                                        average-badge
+                                        average-empty
+                                    "
+                                >
+
+                                    -
+
+                                </span>
+
+
+                                <div
+                                    style="
+                                        font-size:8px;
+                                        color:#adb5bd;
+                                        margin-top:3px;
+                                    "
+                                >
+
+                                    Belum ada nilai
+
+                                </div>
+
+
+                            <?php endif; ?>
+
+
+                        </td>
+
+
+                        <!-- =====================================
                              SKILL
                         ====================================== -->
 
@@ -2411,10 +3124,6 @@ if (!empty($score)) {
 
 
                             <?php
-
-                            $workerId =
-                                (int)$p['id'];
-
 
                             $skillId =
                                 (int)$s['id'];
@@ -2446,7 +3155,6 @@ if (!empty($score)) {
 
                                 $v =
                                     (float)$v;
-
                             }
 
 
@@ -2461,7 +3169,9 @@ if (!empty($score)) {
                                WARNA NILAI
                             ================================= */
 
-                            if ($v === null) {
+                            if (
+                                $v === null
+                            ) {
 
                                 $cls =
                                     'score-dash';
@@ -2484,7 +3194,6 @@ if (!empty($score)) {
 
                                 $cls =
                                     'score-1';
-
                             }
 
                             ?>
@@ -2511,7 +3220,6 @@ if (!empty($score)) {
                                         "
                                     >
 
-
                                         <?php if (
                                             $v === null
                                         ): ?>
@@ -2522,11 +3230,12 @@ if (!empty($score)) {
 
                                             <?= number_format(
                                                 $v,
-                                                1
+                                                1,
+                                                ',',
+                                                '.'
                                             ) ?>
 
                                         <?php endif; ?>
-
 
                                     </span>
 
@@ -2550,7 +3259,9 @@ if (!empty($score)) {
                                             Gap
                                             -<?= number_format(
                                                 $t - $v,
-                                                1
+                                                1,
+                                                ',',
+                                                '.'
                                             ) ?>
 
                                         </span>
@@ -2565,7 +3276,7 @@ if (!empty($score)) {
 
                                         <span
                                             style="
-                                                font-size:9px;
+                                                font-size:8px;
                                                 font-weight:700;
                                                 color:#198754;
                                                 margin-top:2px;
@@ -2599,13 +3310,13 @@ if (!empty($score)) {
 
 
                 <!-- =========================================
-                     EMPTY DATA
+                     EMPTY
                 ========================================== -->
 
                 <tr>
 
                     <td
-                        colspan="<?= count($ss) + 1 ?>"
+                        colspan="<?= count($ss) + 2 ?>"
                     >
 
 
@@ -2667,6 +3378,92 @@ if (!empty($score)) {
 
 
 </div>
+
+
+<script>
+
+/* =========================================================
+   FILTER PEKERJA BERDASARKAN DEPARTEMEN
+========================================================= */
+
+document.addEventListener(
+    'DOMContentLoaded',
+    function () {
+
+        const departmentSelect =
+            document.querySelector(
+                'select[name="departemen"]'
+            );
+
+        const workerSelect =
+            document.querySelector(
+                'select[name="pekerja"]'
+            );
+
+
+        if (
+            !departmentSelect ||
+            !workerSelect
+        ) {
+
+            return;
+        }
+
+
+        /*
+         * Simpan semua option pekerja
+         */
+
+        const originalWorkers =
+            Array.from(
+                workerSelect.options
+            ).map(function (option) {
+
+                return {
+
+                    value:
+                        option.value,
+
+                    text:
+                        option.text,
+
+                    departemen:
+                        option.dataset
+                            .departemen || ''
+
+                };
+
+            });
+
+
+        /*
+         * Departemen dari option
+         * pekerja belum tersedia karena
+         * option lama tidak punya dataset.
+         *
+         * Jadi filtering hanya dilakukan
+         * saat user memilih departemen.
+         */
+
+        departmentSelect.addEventListener(
+            'change',
+            function () {
+
+                /*
+                 * Form akan submit normal.
+                 *
+                 * Tidak mengubah pilihan pekerja
+                 * secara otomatis agar tidak
+                 * menghilangkan pilihan user.
+                 */
+
+            }
+        );
+
+    }
+);
+
+</script>
 
 
 <?php
