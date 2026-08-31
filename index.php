@@ -946,6 +946,22 @@ $development_sql = "
 
     ORDER BY
 
+        (
+            AVG(
+                CASE
+                    WHEN ps.tahun = 2026
+                    THEN ps.nilai
+                END
+            )
+            -
+            AVG(
+                CASE
+                    WHEN ps.tahun = 2025
+                    THEN ps.nilai
+                END
+            )
+        ) DESC,
+
         p.nama ASC
 ";
 

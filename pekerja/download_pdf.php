@@ -3,7 +3,8 @@
 /* =========================================================
    DOWNLOAD PDF DETAIL PEKERJA
    GARUDAFOOD SKILL MONITORING
-   ========================================================= */
+   VERSI SESUAI DETAIL PEKERJA
+========================================================= */
 
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
@@ -17,25 +18,19 @@ $project_root = dirname(__DIR__);
 
 
 /* =========================================================
-   LOAD DATABASE CONNECTION
+   LOAD DATABASE
 ========================================================= */
 
 $possible_connections = [
 
     $project_root . '/koneksi.php',
-
     $project_root . '/config/koneksi.php',
-
     $project_root . '/config/database.php',
-
     $project_root . '/database/koneksi.php',
-
     $project_root . '/includes/koneksi.php',
-
     $project_root . '/partials/koneksi.php',
 
 ];
-
 
 $connection_loaded = false;
 
@@ -70,20 +65,8 @@ if (!$connection_loaded) {
             </h2>
 
             <p>
-                File <strong>koneksi.php</strong> tidak ditemukan.
+                File koneksi database tidak ditemukan.
             </p>
-
-            <p>
-                Pastikan file koneksi database berada di:
-            </p>
-
-            <code>
-                ' . htmlspecialchars(
-                    $project_root . '/koneksi.php',
-                    ENT_QUOTES,
-                    'UTF-8'
-                ) . '
-            </code>
 
         </div>
     ');
@@ -95,7 +78,10 @@ if (!$connection_loaded) {
    CEK CONNECTION
 ========================================================= */
 
-if (!isset($conn) || !($conn instanceof mysqli)) {
+if (
+    !isset($conn) ||
+    !($conn instanceof mysqli)
+) {
 
     die('
         <div style="
@@ -113,8 +99,8 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
             </h2>
 
             <p>
-                File koneksi ditemukan, tetapi variable
-                <strong>$conn</strong> bukan koneksi MySQLi.
+                Variable <strong>$conn</strong>
+                tidak tersedia sebagai koneksi MySQLi.
             </p>
 
         </div>
@@ -128,7 +114,6 @@ if (!isset($conn) || !($conn instanceof mysqli)) {
 ========================================================= */
 
 $autoload_file = $project_root . '/vendor/autoload.php';
-
 
 if (!file_exists($autoload_file)) {
 
@@ -148,22 +133,13 @@ if (!file_exists($autoload_file)) {
             </h2>
 
             <p>
-                File Composer berikut tidak ditemukan:
+                Pastikan Composer dan Dompdf sudah terinstall.
             </p>
-
-            <code>
-                ' . htmlspecialchars(
-                    $autoload_file,
-                    ENT_QUOTES,
-                    'UTF-8'
-                ) . '
-            </code>
 
         </div>
     ');
 
 }
-
 
 require_once $autoload_file;
 
@@ -208,7 +184,6 @@ function tanggal_pdf($tanggal)
 
 $id = (int)($_GET['id'] ?? 0);
 
-
 if ($id <= 0) {
 
     die('ID pekerja tidak valid.');
@@ -228,7 +203,6 @@ $stmt = $conn->prepare("
     LIMIT 1
 ");
 
-
 if (!$stmt) {
 
     die(
@@ -238,20 +212,16 @@ if (!$stmt) {
 
 }
 
-
 $stmt->bind_param(
     'i',
     $id
 );
 
-
 $stmt->execute();
-
 
 $pekerja = $stmt
     ->get_result()
     ->fetch_assoc();
-
 
 $stmt->close();
 
@@ -264,171 +234,245 @@ if (!$pekerja) {
 
 
 /* =========================================================
-   TAHUN ASSESSMENT TERBARU
+   SEMUA TAHUN PENILAIAN
 ========================================================= */
+
+$years = [];
+
+$stmt = $conn->prepare("
+    SELECT DISTINCT
+        tahun
+    FROM penilaian_skill
+    WHERE id_pekerja = ?
+      AND tahun IS NOT NULL
+      AND tahun > 0
+    ORDER BY tahun DESC
+");
+
+if ($stmt) {
+
+    $stmt->bind_param(
+        'i',
+        $id
+    );
+
+    $stmt->execute();
+
+    $result_year = $stmt->get_result();
+
+    while ($row = $result_year->fetch_assoc()) {
+
+        $years[] = (int)$row['tahun'];
+
+    }
+
+    $stmt->close();
+
+}
+
+
+/* =========================================================
+   TAHUN TERBARU
+========================================================= */
+
+$tahun_terbaru = !empty($years)
+    ? max($years)
+    : (int)date('Y');
+
+
+/* =========================================================
+   JIKA BELUM ADA DATA TAHUN
+========================================================= */
+
+if (empty($years)) {
+
+    $years = [
+        $tahun_terbaru
+    ];
+
+}
+
+
+/* =========================================================
+   AMBIL SEMUA DATA PENILAIAN
+========================================================= */
+
+$history = [];
 
 $stmt = $conn->prepare("
     SELECT
-        MAX(tahun) AS tahun_terbaru
-    FROM penilaian_skill
-    WHERE id_pekerja = ?
-");
+        ps.id,
+        ps.id_skill,
+        ps.tahun,
+        ps.nilai,
+        ps.tanggal_penilaian,
+        ps.assessor,
+        ps.catatan,
+        s.nama_skill
 
+    FROM penilaian_skill ps
+
+    INNER JOIN skill s
+        ON s.id = ps.id_skill
+
+    WHERE ps.id_pekerja = ?
+
+    ORDER BY
+        s.nama_skill ASC,
+        ps.tahun ASC,
+        ps.id ASC
+");
 
 if (!$stmt) {
 
     die(
-        'Query tahun assessment gagal: ' .
+        'Query riwayat penilaian gagal: ' .
         e_pdf($conn->error)
     );
 
 }
-
 
 $stmt->bind_param(
     'i',
     $id
 );
 
-
 $stmt->execute();
 
+$history_result = $stmt->get_result();
 
-$tmp = $stmt
-    ->get_result()
-    ->fetch_assoc();
 
+while ($row = $history_result->fetch_assoc()) {
+
+    $skill_id = (int)$row['id_skill'];
+
+    $tahun = (int)$row['tahun'];
+
+    if (!isset($history[$skill_id])) {
+
+        $history[$skill_id] = [
+
+            'id_skill' =>
+                $skill_id,
+
+            'nama_skill' =>
+                $row['nama_skill'],
+
+            'years' => [],
+
+            'latest' => null,
+
+        ];
+
+    }
+
+
+    $history[$skill_id]['years'][$tahun] = $row;
+
+
+    /*
+       Data terbaru berdasarkan:
+       tahun terbesar,
+       kemudian ID terbesar.
+    */
+
+    if (
+        $history[$skill_id]['latest'] === null
+        ||
+        $tahun >
+        (int)$history[$skill_id]['latest']['tahun']
+        ||
+        (
+            $tahun ===
+            (int)$history[$skill_id]['latest']['tahun']
+            &&
+            (int)$row['id'] >
+            (int)$history[$skill_id]['latest']['id']
+        )
+    ) {
+
+        $history[$skill_id]['latest'] = $row;
+
+    }
+
+}
 
 $stmt->close();
 
 
-$tahun_terbaru = (int)(
-    $tmp['tahun_terbaru']
-    ?? date('Y')
-);
-
-
-if ($tahun_terbaru <= 0) {
-
-    $tahun_terbaru = (int)date('Y');
-
-}
-
-
 /* =========================================================
-   SKILL TERBARU
+   AMBIL SKILL AKTIF YANG BELUM PUNYA NILAI
+   SUPAYA SKILL MAPPING TETAP LENGKAP
 ========================================================= */
+
+$skill_data = [];
 
 $stmt = $conn->prepare("
     SELECT
-
         s.id AS id_skill,
-
-        s.nama_skill,
-
-        ps.id AS id_penilaian,
-
-        ps.tahun,
-
-        ps.nilai,
-
-        ps.tanggal_penilaian,
-
-        ps.assessor,
-
-        ps.catatan
-
+        s.nama_skill
     FROM skill s
-
-    LEFT JOIN (
-
-        SELECT
-            ps1.*
-
-        FROM penilaian_skill ps1
-
-        INNER JOIN (
-
-            SELECT
-
-                id_skill,
-
-                MAX(
-                    CONCAT(
-                        LPAD(
-                            COALESCE(tahun, 0),
-                            4,
-                            '0'
-                        ),
-                        LPAD(
-                            id,
-                            10,
-                            '0'
-                        )
-                    )
-                ) AS latest_key
-
-            FROM penilaian_skill
-
-            WHERE id_pekerja = ?
-
-            GROUP BY id_skill
-
-        ) latest
-
-            ON latest.id_skill = ps1.id_skill
-
-            AND latest.latest_key =
-                CONCAT(
-                    LPAD(
-                        COALESCE(ps1.tahun, 0),
-                        4,
-                        '0'
-                    ),
-                    LPAD(
-                        ps1.id,
-                        10,
-                        '0'
-                    )
-                )
-
-        WHERE ps1.id_pekerja = ?
-
-    ) ps
-
-        ON ps.id_skill = s.id
-
     WHERE s.status = 'Aktif'
-
-    ORDER BY
-        s.nama_skill ASC
+    ORDER BY s.nama_skill ASC
 ");
 
+if ($stmt) {
 
-if (!$stmt) {
+    $stmt->execute();
 
-    die(
-        'Query skill gagal: ' .
-        e_pdf($conn->error)
-    );
+    $skill_result = $stmt->get_result();
+
+    while ($row = $skill_result->fetch_assoc()) {
+
+        $id_skill = (int)$row['id_skill'];
+
+        $latest = null;
+
+        if (
+            isset($history[$id_skill])
+        ) {
+
+            $latest =
+                $history[$id_skill]['latest'];
+
+        }
+
+
+        $skill_data[] = [
+
+            'id_skill' =>
+                $id_skill,
+
+            'nama_skill' =>
+                $row['nama_skill'],
+
+            'nilai' =>
+                $latest['nilai']
+                ?? null,
+
+            'tahun' =>
+                $latest['tahun']
+                ?? null,
+
+            'tanggal_penilaian' =>
+                $latest['tanggal_penilaian']
+                ?? null,
+
+            'assessor' =>
+                $latest['assessor']
+                ?? null,
+
+            'catatan' =>
+                $latest['catatan']
+                ?? null,
+
+        ];
+
+    }
+
+    $stmt->close();
 
 }
-
-
-$stmt->bind_param(
-    'ii',
-    $id,
-    $id
-);
-
-
-$stmt->execute();
-
-
-$skill_result = $stmt->get_result();
-
-
-$skill_data = [];
 
 
 /* =========================================================
@@ -451,25 +495,28 @@ $total_gap = 0;
 
 
 /* =========================================================
-   PROSES SKILL
+   PROSES SKILL TERBARU
 ========================================================= */
 
-while ($row = $skill_result->fetch_assoc()) {
+foreach ($skill_data as &$skill) {
 
-    $actual =
-        $row['nilai'] !== null
-            ? (float)$row['nilai']
-            : 0;
+    $nilai = $skill['nilai'] !== null
+        ? (float)$skill['nilai']
+        : null;
 
+
+    /*
+       TARGET DEFAULT SESUAI DETAIL PEKERJA
+    */
 
     $target = 3;
 
 
-    if ($row['nilai'] !== null) {
+    if ($nilai !== null) {
 
         $gap = max(
             0,
-            $target - $actual
+            $target - $nilai
         );
 
     } else {
@@ -479,9 +526,7 @@ while ($row = $skill_result->fetch_assoc()) {
     }
 
 
-    /* STATUS */
-
-    if ($row['nilai'] === null) {
+    if ($nilai === null) {
 
         $status = 'Belum Dinilai';
 
@@ -514,13 +559,11 @@ while ($row = $skill_result->fetch_assoc()) {
     }
 
 
-    /* STATISTIK */
-
-    if ($row['nilai'] !== null) {
+    if ($nilai !== null) {
 
         $total_skill++;
 
-        $total_actual += $actual;
+        $total_actual += $nilai;
 
         $total_target += $target;
 
@@ -529,23 +572,26 @@ while ($row = $skill_result->fetch_assoc()) {
     }
 
 
-    $row['actual'] = $actual;
+    $skill['actual'] =
+        $nilai !== null
+            ? $nilai
+            : 0;
 
-    $row['target'] = $target;
+    $skill['target'] =
+        $target;
 
-    $row['gap'] = $gap;
+    $skill['gap'] =
+        $gap;
 
-    $row['status_label'] = $status;
+    $skill['status_label'] =
+        $status;
 
-    $row['status_class'] = $status_class;
-
-
-    $skill_data[] = $row;
+    $skill['status_class'] =
+        $status_class;
 
 }
 
-
-$stmt->close();
+unset($skill);
 
 
 /* =========================================================
@@ -596,124 +642,20 @@ if ($total_training > 0) {
 
 
 /* =========================================================
-   RIWAYAT PENILAIAN
+   URUTKAN SKILL
 ========================================================= */
 
-$stmt = $conn->prepare("
-    SELECT
+usort(
+    $skill_data,
+    function ($a, $b) {
 
-        ps.*,
-
-        s.nama_skill
-
-    FROM penilaian_skill ps
-
-    INNER JOIN skill s
-        ON s.id = ps.id_skill
-
-    WHERE ps.id_pekerja = ?
-
-    ORDER BY
-
-        ps.tahun DESC,
-
-        ps.tanggal_penilaian DESC,
-
-        ps.id DESC
-
-    LIMIT 100
-");
-
-
-if (!$stmt) {
-
-    die(
-        'Query riwayat penilaian gagal: ' .
-        e_pdf($conn->error)
-    );
-
-}
-
-
-$stmt->bind_param(
-    'i',
-    $id
-);
-
-
-$stmt->execute();
-
-
-$history_result = $stmt->get_result();
-
-
-$stmt->close();
-
-
-/* =========================================================
-   RIWAYAT TRAINING
-========================================================= */
-
-$training_data = [];
-
-
-$stmt_training = $conn->prepare("
-    SELECT
-
-        tp.*,
-
-        t.nama_training,
-
-        t.tanggal_mulai,
-
-        t.tanggal_selesai,
-
-        t.trainer,
-
-        t.lokasi,
-
-        t.status AS status_training
-
-    FROM training_peserta tp
-
-    INNER JOIN training t
-        ON t.id = tp.id_training
-
-    WHERE tp.id_pekerja = ?
-
-    ORDER BY
-
-        t.tanggal_mulai DESC,
-
-        t.id DESC
-");
-
-
-if ($stmt_training) {
-
-    $stmt_training->bind_param(
-        'i',
-        $id
-    );
-
-
-    $stmt_training->execute();
-
-
-    $training_result =
-        $stmt_training->get_result();
-
-
-    while ($t = $training_result->fetch_assoc()) {
-
-        $training_data[] = $t;
+        return strcasecmp(
+            $a['nama_skill'],
+            $b['nama_skill']
+        );
 
     }
-
-
-    $stmt_training->close();
-
-}
+);
 
 
 /* =========================================================
@@ -737,26 +679,135 @@ usort(
     $training_priority,
     function ($a, $b) {
 
-        return $b['gap'] <=> $a['gap'];
+        if (
+            $a['gap'] ==
+            $b['gap']
+        ) {
+
+            return
+                $a['actual']
+                <=>
+                $b['actual'];
+
+        }
+
+        return
+            $b['gap']
+            <=>
+            $a['gap'];
 
     }
 );
 
 
-$training_priority = array_slice(
-    $training_priority,
-    0,
-    5
-);
+$training_priority =
+    array_slice(
+        $training_priority,
+        0,
+        5
+    );
 
 
 /* =========================================================
-   LOGO GARUDAFOOD
-=========================================================
+   RINGKASAN PER TAHUN
+========================================================= */
 
-   Tidak menampilkan teks GARUDAFOOD sebagai fallback.
+$year_summary = [];
 
-   Sistem mencoba beberapa lokasi logo yang umum.
+foreach ($years as $year) {
+
+    $total = 0;
+
+    $count = 0;
+
+    foreach ($history as $item) {
+
+        if (
+            isset(
+                $item['years'][$year]
+            )
+            &&
+            $item['years'][$year]['nilai']
+            !== null
+        ) {
+
+            $total +=
+                (float)$item['years'][$year]['nilai'];
+
+            $count++;
+
+        }
+
+    }
+
+
+    $year_summary[$year] =
+        $count > 0
+            ? $total / $count
+            : null;
+
+}
+
+
+/* =========================================================
+   RIWAYAT TRAINING
+========================================================= */
+
+$training_data = [];
+
+$stmt_training = $conn->prepare("
+    SELECT
+        tp.*,
+
+        t.nama_training,
+        t.tanggal_mulai,
+        t.tanggal_selesai,
+        t.trainer,
+        t.lokasi,
+        t.status AS status_training
+
+    FROM training_peserta tp
+
+    INNER JOIN training t
+        ON t.id = tp.id_training
+
+    WHERE tp.id_pekerja = ?
+
+    ORDER BY
+        t.tanggal_mulai DESC,
+        t.id DESC
+");
+
+if ($stmt_training) {
+
+    $stmt_training->bind_param(
+        'i',
+        $id
+    );
+
+    $stmt_training->execute();
+
+    $training_result =
+        $stmt_training->get_result();
+
+
+    while (
+        $row =
+            $training_result->fetch_assoc()
+    ) {
+
+        $training_data[] = $row;
+
+    }
+
+
+    $stmt_training->close();
+
+}
+
+
+/* =========================================================
+   LOGO
 ========================================================= */
 
 $logo_data = '';
@@ -764,21 +815,13 @@ $logo_data = '';
 $possible_logos = [
 
     $project_root . '/assets/logo-garudafood.png',
-
     $project_root . '/assets/logo-garudafood.jpg',
-
     $project_root . '/assets/logo-garudafood.jpeg',
-
     $project_root . '/assets/logo.png',
-
     $project_root . '/assets/img/logo-garudafood.png',
-
     $project_root . '/assets/images/logo-garudafood.png',
-
     $project_root . '/img/logo-garudafood.png',
-
     $project_root . '/images/logo-garudafood.png',
-
     $project_root . '/uploads/logo-garudafood.png',
 
 ];
@@ -791,9 +834,10 @@ foreach ($possible_logos as $logo_path) {
     }
 
 
-    $logo_binary = @file_get_contents(
-        $logo_path
-    );
+    $logo_binary =
+        @file_get_contents(
+            $logo_path
+        );
 
 
     if ($logo_binary === false) {
@@ -801,15 +845,16 @@ foreach ($possible_logos as $logo_path) {
     }
 
 
-    $logo_extension = strtolower(
-        pathinfo(
-            $logo_path,
-            PATHINFO_EXTENSION
-        )
-    );
+    $extension =
+        strtolower(
+            pathinfo(
+                $logo_path,
+                PATHINFO_EXTENSION
+            )
+        );
 
 
-    switch ($logo_extension) {
+    switch ($extension) {
 
         case 'jpg':
         case 'jpeg':
@@ -841,6 +886,7 @@ foreach ($possible_logos as $logo_path) {
             $mime = 'image/png';
 
             break;
+
     }
 
 
@@ -883,19 +929,16 @@ ob_start();
 @page {
 
     margin:
+        25px
         28px
-        35px
-        35px
-        35px;
+        30px
+        28px;
 
 }
 
 
 * {
-
-    box-sizing:
-        border-box;
-
+    box-sizing: border-box;
 }
 
 
@@ -909,10 +952,10 @@ body {
         #172033;
 
     font-size:
-        8.5px;
+        8px;
 
     line-height:
-        1.45;
+        1.4;
 
     margin:
         0;
@@ -921,24 +964,20 @@ body {
 
 
 /* =========================================================
-   KOP SURAT
+   HEADER
 ========================================================= */
 
-.letterhead {
+.header-table {
 
-    width:
-        100%;
+    width: 100%;
 
     border-collapse:
         collapse;
 
-    margin-bottom:
-        5px;
-
 }
 
 
-.letterhead td {
+.header-table td {
 
     vertical-align:
         middle;
@@ -949,24 +988,18 @@ body {
 .logo-cell {
 
     width:
-        105px;
-
-    text-align:
-        left;
+        90px;
 
 }
 
 
 .logo {
 
-    display:
-        block;
-
     max-width:
-        90px;
+        78px;
 
     max-height:
-        48px;
+        42px;
 
 }
 
@@ -981,28 +1014,25 @@ body {
 
 .company-name {
 
-    font-size:
-        15px;
-
-    font-weight:
-        bold;
-
     color:
         #092f63;
 
-    letter-spacing:
-        .2px;
+    font-size:
+        13px;
+
+    font-weight:
+        bold;
 
 }
 
 
 .company-sub {
 
-    font-size:
-        7.5px;
-
     color:
-        #657184;
+        #788396;
+
+    font-size:
+        7px;
 
     margin-top:
         2px;
@@ -1010,27 +1040,24 @@ body {
 }
 
 
-.document-cell {
+.doc-cell {
 
     width:
-        105px;
+        90px;
 
     text-align:
         right;
 
-    vertical-align:
-        top !important;
-
 }
 
 
-.document-label {
-
-    font-size:
-        6.5px;
+.doc-label {
 
     color:
-        #7b8491;
+        #788396;
+
+    font-size:
+        6px;
 
     text-transform:
         uppercase;
@@ -1038,16 +1065,16 @@ body {
 }
 
 
-.document-year {
-
-    font-size:
-        11px;
-
-    font-weight:
-        bold;
+.doc-year {
 
     color:
         #123b72;
+
+    font-size:
+        10px;
+
+    font-weight:
+        bold;
 
     margin-top:
         2px;
@@ -1064,10 +1091,7 @@ body {
         #123b72;
 
     margin-top:
-        8px;
-
-    margin-bottom:
-        2px;
+        7px;
 
 }
 
@@ -1078,10 +1102,10 @@ body {
         1px;
 
     background:
-        #c8d0dc;
+        #d8dee8;
 
     margin-bottom:
-        18px;
+        14px;
 
 }
 
@@ -1090,27 +1114,27 @@ body {
    TITLE
 ========================================================= */
 
-.report-title {
+.title {
 
     text-align:
         center;
 
     margin-bottom:
-        17px;
+        14px;
 
 }
 
 
-.report-title-main {
-
-    font-size:
-        15px;
-
-    font-weight:
-        bold;
+.title-main {
 
     color:
         #172033;
+
+    font-size:
+        14px;
+
+    font-weight:
+        bold;
 
     text-transform:
         uppercase;
@@ -1118,16 +1142,16 @@ body {
 }
 
 
-.report-title-sub {
+.title-sub {
 
     color:
-        #7a8492;
+        #788396;
 
     font-size:
-        8px;
+        7px;
 
     margin-top:
-        3px;
+        2px;
 
 }
 
@@ -1139,36 +1163,36 @@ body {
 .section {
 
     margin-top:
-        16px;
+        14px;
 
     margin-bottom:
-        8px;
+        7px;
 
 }
 
 
 .section-title {
 
-    font-size:
-        10px;
-
-    font-weight:
-        bold;
-
     color:
         #092f63;
 
-    text-transform:
-        uppercase;
+    font-size:
+        9px;
+
+    font-weight:
+        bold;
 
     border-left:
         4px solid #123b72;
 
     padding-left:
-        7px;
+        6px;
 
     margin-bottom:
-        8px;
+        7px;
+
+    text-transform:
+        uppercase;
 
 }
 
@@ -1190,8 +1214,11 @@ body {
 
 .profile td {
 
+    width:
+        50%;
+
     padding:
-        7px 9px;
+        6px 8px;
 
     border:
         1px solid #dfe4eb;
@@ -1202,19 +1229,16 @@ body {
 }
 
 
-.profile-label {
-
-    font-size:
-        6.5px;
+.label {
 
     color:
         #788396;
 
+    font-size:
+        6px;
+
     text-transform:
         uppercase;
-
-    letter-spacing:
-        .4px;
 
     margin-bottom:
         2px;
@@ -1222,16 +1246,16 @@ body {
 }
 
 
-.profile-value {
-
-    font-size:
-        9px;
-
-    font-weight:
-        bold;
+.value {
 
     color:
         #172033;
+
+    font-size:
+        8px;
+
+    font-weight:
+        bold;
 
 }
 
@@ -1246,16 +1270,16 @@ body {
         inline-block;
 
     padding:
-        3px 7px;
+        3px 6px;
 
     border-radius:
         4px;
 
+    font-size:
+        6.5px;
+
     font-weight:
         bold;
-
-    font-size:
-        7px;
 
 }
 
@@ -1305,7 +1329,7 @@ body {
 
 
 /* =========================================================
-   STATISTICS
+   STATISTIC
 ========================================================= */
 
 .stats {
@@ -1317,10 +1341,10 @@ body {
         separate;
 
     border-spacing:
-        5px;
+        4px;
 
     margin-left:
-        -5px;
+        -4px;
 
 }
 
@@ -1334,7 +1358,7 @@ body {
         1px solid #dfe4eb;
 
     padding:
-        9px;
+        7px;
 
     background:
         #fff;
@@ -1344,11 +1368,11 @@ body {
 
 .stat-label {
 
-    font-size:
-        6.5px;
-
     color:
         #788396;
+
+    font-size:
+        6px;
 
     text-transform:
         uppercase;
@@ -1358,14 +1382,14 @@ body {
 
 .stat-value {
 
+    color:
+        #123b72;
+
     font-size:
-        17px;
+        15px;
 
     font-weight:
         bold;
-
-    color:
-        #123b72;
 
     margin-top:
         2px;
@@ -1375,11 +1399,11 @@ body {
 
 .stat-note {
 
-    font-size:
-        6.5px;
-
     color:
         #8a94a4;
+
+    font-size:
+        6px;
 
 }
 
@@ -1396,54 +1420,45 @@ body {
     border-collapse:
         collapse;
 
-    margin-top:
-        3px;
-
 }
 
 
 .data-table th {
 
-    background:
-        #123b72;
-
     color:
         #fff;
 
-    font-size:
-        6.8px;
-
-    font-weight:
-        bold;
-
-    text-transform:
-        uppercase;
-
-    padding:
-        6px;
+    background:
+        #123b72;
 
     border:
         1px solid #123b72;
 
-    text-align:
-        left;
+    padding:
+        5px;
+
+    font-size:
+        6.5px;
+
+    text-transform:
+        uppercase;
 
 }
 
 
 .data-table td {
 
-    padding:
-        6px;
-
     border:
         1px solid #dfe4eb;
 
-    vertical-align:
-        middle;
+    padding:
+        5px;
 
     font-size:
-        7.8px;
+        7px;
+
+    vertical-align:
+        middle;
 
 }
 
@@ -1459,7 +1474,7 @@ body {
 .center {
 
     text-align:
-        center !important;
+        center;
 
 }
 
@@ -1467,18 +1482,310 @@ body {
 .right {
 
     text-align:
-        right !important;
+        right;
 
 }
 
 
 .small {
 
+    color:
+        #788396;
+
+    font-size:
+        6px;
+
+}
+
+
+/* =========================================================
+   HISTORY MATRIX
+========================================================= */
+
+.history-table {
+
+    width:
+        100%;
+
+    border-collapse:
+        collapse;
+
+    table-layout:
+        fixed;
+
+}
+
+
+.history-table th {
+
+    background:
+        #123b72;
+
+    color:
+        #fff;
+
+    border:
+        1px solid #123b72;
+
+    padding:
+        6px 4px;
+
     font-size:
         6.5px;
 
+    text-align:
+        center;
+
+}
+
+
+.history-table th.skill-head {
+
+    width:
+        42%;
+
+    text-align:
+        left;
+
+}
+
+
+.history-table td {
+
+    border:
+        1px solid #dfe4eb;
+
+    padding:
+        5px 4px;
+
+    font-size:
+        7px;
+
+}
+
+
+.history-table tr:nth-child(even) td {
+
+    background:
+        #f8fafc;
+
+}
+
+
+.skill-name {
+
+    font-weight:
+        bold;
+
+}
+
+
+.history-score {
+
+    text-align:
+        center;
+
+    font-size:
+        8px;
+
+    font-weight:
+        bold;
+
+    color:
+        #123b72;
+
+}
+
+
+.history-empty {
+
+    color:
+        #9aa3af;
+
+    text-align:
+        center;
+
+}
+
+
+/* =========================================================
+   MINI BAR
+========================================================= */
+
+.bar-wrap {
+
+    width:
+        100%;
+
+    height:
+        6px;
+
+    background:
+        #edf0f4;
+
+    margin-top:
+        3px;
+
+}
+
+
+.bar {
+
+    height:
+        6px;
+
+    background:
+        #123b72;
+
+}
+
+
+.bar-label {
+
     color:
         #788396;
+
+    font-size:
+        5.5px;
+
+}
+
+
+/* =========================================================
+   CHART AREA
+========================================================= */
+
+.chart-table {
+
+    width:
+        100%;
+
+    border-collapse:
+        collapse;
+
+}
+
+
+.chart-table td {
+
+    padding:
+        4px 3px;
+
+    border-bottom:
+        1px solid #edf0f4;
+
+    vertical-align:
+        middle;
+
+}
+
+
+.chart-skill {
+
+    width:
+        30%;
+
+    font-size:
+        6.5px;
+
+    font-weight:
+        bold;
+
+}
+
+
+.chart-values {
+
+    width:
+        70%;
+
+}
+
+
+.chart-year {
+
+    display:
+        inline-block;
+
+    width:
+        42px;
+
+    margin-right:
+        4px;
+
+    text-align:
+        center;
+
+    vertical-align:
+        top;
+
+}
+
+
+.chart-year-label {
+
+    font-size:
+        5.5px;
+
+    color:
+        #788396;
+
+}
+
+
+.chart-number {
+
+    font-size:
+        7px;
+
+    font-weight:
+        bold;
+
+    color:
+        #123b72;
+
+}
+
+
+.chart-bar-bg {
+
+    width:
+        38px;
+
+    height:
+        35px;
+
+    border:
+        1px solid #dfe4eb;
+
+    background:
+        #f8fafc;
+
+    position:
+        relative;
+
+    margin:
+        2px auto;
+
+}
+
+
+.chart-bar-fill {
+
+    position:
+        absolute;
+
+    bottom:
+        0;
+
+    left:
+        0;
+
+    width:
+        100%;
+
+    background:
+        #123b72;
 
 }
 
@@ -1487,19 +1794,19 @@ body {
    EMPTY
 ========================================================= */
 
-.no-data {
+.empty {
 
-    text-align:
-        center;
+    border:
+        1px solid #dfe4eb;
 
     color:
         #8a94a4;
 
     padding:
-        14px;
+        12px;
 
-    border:
-        1px solid #dfe4eb;
+    text-align:
+        center;
 
 }
 
@@ -1512,6 +1819,9 @@ body {
 
     width:
         100%;
+
+    border-collapse:
+        collapse;
 
     margin-top:
         25px;
@@ -1527,19 +1837,16 @@ body {
     text-align:
         center;
 
-    vertical-align:
-        top;
-
 }
 
 
 .signature-title {
 
-    font-size:
-        7px;
-
     color:
         #788396;
+
+    font-size:
+        6.5px;
 
 }
 
@@ -1547,21 +1854,21 @@ body {
 .signature-space {
 
     height:
-        42px;
+        38px;
 
 }
 
 
 .signature-line {
 
-    border-top:
-        1px solid #7b8491;
-
     width:
-        150px;
+        140px;
 
     margin:
         0 auto;
+
+    border-top:
+        1px solid #7b8491;
 
 }
 
@@ -1573,27 +1880,27 @@ body {
 .footer {
 
     margin-top:
-        22px;
+        18px;
 
     border-top:
         1px solid #dfe4eb;
 
     padding-top:
-        7px;
+        6px;
 
     color:
         #8a94a4;
 
     font-size:
-        6.5px;
+        6px;
 
 }
 
 
-.footer-left {
+.footer-table {
 
-    text-align:
-        left;
+    width:
+        100%;
 
 }
 
@@ -1614,10 +1921,10 @@ body {
 
 
 <!-- =====================================================
-     KOP SURAT
+     HEADER
 ===================================================== -->
 
-<table class="letterhead">
+<table class="header-table">
 
 <tr>
 
@@ -1649,13 +1956,13 @@ Skill Monitoring &amp; Competency Management System
 </td>
 
 
-<td class="document-cell">
+<td class="doc-cell">
 
-<div class="document-label">
-Dokumen
+<div class="doc-label">
+Assessment Terakhir
 </div>
 
-<div class="document-year">
+<div class="doc-year">
 <?= e_pdf($tahun_terbaru) ?>
 </div>
 
@@ -1672,17 +1979,17 @@ Dokumen
 
 
 <!-- =====================================================
-     JUDUL
+     TITLE
 ===================================================== -->
 
-<div class="report-title">
+<div class="title">
 
-<div class="report-title-main">
-Laporan Detail Kompetensi Pekerja
+<div class="title-main">
+Laporan Detail Pekerja
 </div>
 
-<div class="report-title-sub">
-Skill Assessment &amp; Competency Development Report
+<div class="title-sub">
+Skill Mapping, Assessment History &amp; Training Development
 </div>
 
 </div>
@@ -1703,13 +2010,13 @@ Skill Assessment &amp; Competency Development Report
 
 <tr>
 
-<td width="50%">
+<td>
 
-<div class="profile-label">
+<div class="label">
 Nama Pekerja
 </div>
 
-<div class="profile-value">
+<div class="value">
 <?= e_pdf(
     $pekerja['nama'] ?? '-'
 ) ?>
@@ -1718,13 +2025,13 @@ Nama Pekerja
 </td>
 
 
-<td width="50%">
+<td>
 
-<div class="profile-label">
+<div class="label">
 Departemen
 </div>
 
-<div class="profile-value">
+<div class="value">
 <?= e_pdf(
     $pekerja['departemen'] ?? '-'
 ) ?>
@@ -1739,11 +2046,11 @@ Departemen
 
 <td>
 
-<div class="profile-label">
+<div class="label">
 No. Reg / ID
 </div>
 
-<div class="profile-value">
+<div class="value">
 <?= e_pdf(
     $pekerja['id'] ?? '-'
 ) ?>
@@ -1754,11 +2061,11 @@ No. Reg / ID
 
 <td>
 
-<div class="profile-label">
+<div class="label">
 Status Pekerja
 </div>
 
-<div class="profile-value">
+<div class="value">
 <?= e_pdf(
     $pekerja['status'] ?? '-'
 ) ?>
@@ -1773,11 +2080,11 @@ Status Pekerja
 
 <td>
 
-<div class="profile-label">
+<div class="label">
 Assessment Terakhir
 </div>
 
-<div class="profile-value">
+<div class="value">
 <?= e_pdf($tahun_terbaru) ?>
 </div>
 
@@ -1786,15 +2093,14 @@ Assessment Terakhir
 
 <td>
 
-<div class="profile-label">
+<div class="label">
 Status Kompetensi
 </div>
 
-<span
-    class="status status-<?= e_pdf(
-        $overall_class
-    ) ?>"
->
+<span class="
+    status
+    status-<?= e_pdf($overall_class) ?>
+">
 
 <?= e_pdf($overall_status) ?>
 
@@ -1838,7 +2144,7 @@ Rata-rata Skill
 </div>
 
 <div class="stat-note">
-Target
+Target rata-rata
 <?= number_format(
     $rata_target,
     2
@@ -1852,7 +2158,7 @@ Target
 <td class="stat">
 
 <div class="stat-label">
-Kompeten
+Skill Kompeten
 </div>
 
 <div class="stat-value">
@@ -1913,13 +2219,13 @@ Prioritas pengembangan
 
 
 <!-- =====================================================
-     03 SKILL MAPPING
+     03 SKILL MAPPING TERBARU
 ===================================================== -->
 
 <div class="section">
 
 <div class="section-title">
-03 &nbsp; Skill Mapping
+03 &nbsp; Skill Mapping Terbaru
 </div>
 
 
@@ -1936,33 +2242,37 @@ Prioritas pengembangan
 No
 </th>
 
-<th width="35%">
-Kompetensi
+<th width="38%">
+Kompetensi / Skill
 </th>
 
 <th
-    width="12%"
+    width="10%"
     class="center"
 >
-Actual
+Nilai
 </th>
 
 <th
-    width="12%"
+    width="10%"
     class="center"
 >
 Target
 </th>
 
 <th
-    width="12%"
+    width="10%"
     class="center"
 >
 Gap
 </th>
 
-<th width="24%">
+<th width="17%">
 Status
+</th>
+
+<th width="10%">
+Tanggal
 </th>
 
 </tr>
@@ -1976,42 +2286,22 @@ Status
 
 <?php $no = 1; ?>
 
-
 <?php foreach ($skill_data as $s): ?>
 
 <tr>
 
 <td class="center">
-
 <?= $no++ ?>
-
 </td>
 
 
 <td>
 
 <strong>
-
 <?= e_pdf(
     $s['nama_skill']
 ) ?>
-
 </strong>
-
-
-<?php if (!empty($s['tanggal_penilaian'])): ?>
-
-<div class="small">
-
-Assessment:
-
-<?= tanggal_pdf(
-    $s['tanggal_penilaian']
-) ?>
-
-</div>
-
-<?php endif; ?>
 
 </td>
 
@@ -2020,17 +2310,17 @@ Assessment:
 
 <?php if ($s['nilai'] === null): ?>
 
+<span class="history-empty">
 -
+</span>
 
 <?php else: ?>
 
 <strong>
-
 <?= number_format(
     $s['actual'],
     0
 ) ?>
-
 </strong>
 
 <?php endif; ?>
@@ -2041,12 +2331,10 @@ Assessment:
 <td class="center">
 
 <strong>
-
 <?= number_format(
     $s['target'],
     0
 ) ?>
-
 </strong>
 
 </td>
@@ -2061,12 +2349,10 @@ Assessment:
 <?php elseif ($s['gap'] > 0): ?>
 
 <strong>
-
 <?= number_format(
     $s['gap'],
     0
 ) ?>
-
 </strong>
 
 <?php else: ?>
@@ -2080,17 +2366,27 @@ Assessment:
 
 <td>
 
-<span
-    class="status status-<?= e_pdf(
+<span class="
+    status
+    status-<?= e_pdf(
         $s['status_class']
-    ) ?>"
->
+    ) ?>
+">
 
 <?= e_pdf(
     $s['status_label']
 ) ?>
 
 </span>
+
+</td>
+
+
+<td class="center">
+
+<?= tanggal_pdf(
+    $s['tanggal_penilaian']
+) ?>
 
 </td>
 
@@ -2104,8 +2400,8 @@ Assessment:
 <tr>
 
 <td
-    colspan="6"
-    class="no-data"
+    colspan="7"
+    class="empty"
 >
 
 Belum ada data kompetensi.
@@ -2124,13 +2420,294 @@ Belum ada data kompetensi.
 
 
 <!-- =====================================================
-     04 PRIORITAS TRAINING
+     04 RIWAYAT PENILAIAN - MATRIX
 ===================================================== -->
 
 <div class="section">
 
 <div class="section-title">
-04 &nbsp; Prioritas Training
+04 &nbsp; Riwayat Penilaian Skill
+</div>
+
+
+<div class="small" style="margin-bottom:6px;">
+
+Setiap tahun ditampilkan sebagai kolom.
+Nilai terbaru dapat dibandingkan langsung dengan nilai tahun sebelumnya.
+
+</div>
+
+
+<?php if (!empty($history)): ?>
+
+
+<table class="history-table">
+
+<thead>
+
+<tr>
+
+<th class="skill-head">
+Kompetensi / Skill
+</th>
+
+
+<?php foreach ($years as $year): ?>
+
+<th>
+<?= e_pdf($year) ?>
+</th>
+
+<?php endforeach; ?>
+
+</tr>
+
+</thead>
+
+
+<tbody>
+
+<?php foreach ($history as $item): ?>
+
+<tr>
+
+<td>
+
+<div class="skill-name">
+
+<?= e_pdf(
+    $item['nama_skill']
+) ?>
+
+</div>
+
+</td>
+
+
+<?php foreach ($years as $year): ?>
+
+<td>
+
+<?php
+
+$record =
+    $item['years'][$year]
+    ?? null;
+
+?>
+
+
+<?php if (
+    $record
+    &&
+    $record['nilai'] !== null
+): ?>
+
+<div class="history-score">
+
+<?= number_format(
+    (float)$record['nilai'],
+    0
+) ?>
+
+</div>
+
+
+<div class="small center">
+
+<?= tanggal_pdf(
+    $record['tanggal_penilaian']
+) ?>
+
+</div>
+
+
+<?php else: ?>
+
+<div class="history-empty">
+-
+</div>
+
+<?php endif; ?>
+
+</td>
+
+<?php endforeach; ?>
+
+</tr>
+
+<?php endforeach; ?>
+
+</tbody>
+
+</table>
+
+
+<?php else: ?>
+
+<div class="empty">
+
+Belum ada riwayat penilaian skill.
+
+</div>
+
+<?php endif; ?>
+
+</div>
+
+
+<!-- =====================================================
+     05 PERKEMBANGAN NILAI PER SKILL
+===================================================== -->
+
+<div class="section">
+
+<div class="section-title">
+05 &nbsp; Perkembangan Nilai Per Skill
+</div>
+
+
+<div class="small" style="margin-bottom:6px;">
+
+Perbandingan nilai setiap skill dari tahun ke tahun.
+Skala nilai 1 sampai 5.
+
+</div>
+
+
+<?php if (!empty($history)): ?>
+
+
+<table class="chart-table">
+
+<?php foreach ($history as $item): ?>
+
+<tr>
+
+<td class="chart-skill">
+
+<?= e_pdf(
+    $item['nama_skill']
+) ?>
+
+</td>
+
+
+<td class="chart-values">
+
+
+<?php foreach ($years as $year): ?>
+
+<?php
+
+$record =
+    $item['years'][$year]
+    ?? null;
+
+
+$nilai =
+    (
+        $record
+        &&
+        $record['nilai'] !== null
+    )
+        ? (float)$record['nilai']
+        : null;
+
+
+$height =
+    $nilai !== null
+        ? max(
+            2,
+            min(
+                100,
+                ($nilai / 5) * 100
+            )
+        )
+        : 0;
+
+?>
+
+
+<div class="chart-year">
+
+<div class="chart-year-label">
+<?= e_pdf($year) ?>
+</div>
+
+
+<div class="chart-bar-bg">
+
+<?php if ($nilai !== null): ?>
+
+<div
+    class="chart-bar-fill"
+    style="
+        height:
+        <?= number_format(
+            $height,
+            0
+        ) ?>%;
+    "
+></div>
+
+<?php endif; ?>
+
+</div>
+
+
+<div class="chart-number">
+
+<?php if ($nilai !== null): ?>
+
+<?= number_format(
+    $nilai,
+    0
+) ?>
+
+<?php else: ?>
+
+-
+
+<?php endif; ?>
+
+</div>
+
+</div>
+
+<?php endforeach; ?>
+
+
+</td>
+
+</tr>
+
+<?php endforeach; ?>
+
+</table>
+
+
+<?php else: ?>
+
+<div class="empty">
+
+Belum ada data untuk grafik perkembangan.
+
+</div>
+
+<?php endif; ?>
+
+</div>
+
+
+<!-- =====================================================
+     06 PRIORITAS TRAINING
+===================================================== -->
+
+<div class="section">
+
+<div class="section-title">
+06 &nbsp; Prioritas Training
 </div>
 
 
@@ -2144,7 +2721,7 @@ Belum ada data kompetensi.
 <tr>
 
 <th
-    width="8%"
+    width="7%"
     class="center"
 >
 No
@@ -2155,21 +2732,21 @@ Kompetensi
 </th>
 
 <th
-    width="17%"
+    width="13%"
     class="center"
 >
-Actual
+Nilai
 </th>
 
 <th
-    width="17%"
+    width="13%"
     class="center"
 >
 Target
 </th>
 
 <th
-    width="17%"
+    width="13%"
     class="center"
 >
 Gap
@@ -2189,7 +2766,10 @@ Prioritas
 <?php $no = 1; ?>
 
 
-<?php foreach ($training_priority as $s): ?>
+<?php foreach (
+    $training_priority
+    as $s
+): ?>
 
 <tr>
 
@@ -2203,11 +2783,9 @@ Prioritas
 <td>
 
 <strong>
-
 <?= e_pdf(
     $s['nama_skill']
 ) ?>
-
 </strong>
 
 </td>
@@ -2276,14 +2854,12 @@ Sedang
 
 <?php else: ?>
 
-
-<div class="no-data">
+<div class="empty">
 
 Tidak terdapat kompetensi yang membutuhkan
 prioritas training.
 
 </div>
-
 
 <?php endif; ?>
 
@@ -2291,13 +2867,13 @@ prioritas training.
 
 
 <!-- =====================================================
-     05 RIWAYAT PENILAIAN
+     07 RINGKASAN PERKEMBANGAN TAHUN
 ===================================================== -->
 
 <div class="section">
 
 <div class="section-title">
-05 &nbsp; Riwayat Penilaian Skill
+07 &nbsp; Ringkasan Perkembangan Tahunan
 </div>
 
 
@@ -2307,31 +2883,20 @@ prioritas training.
 
 <tr>
 
-<th width="9%">
+<th width="25%">
 Tahun
 </th>
 
-<th width="14%">
-Tanggal
+<th width="25%" class="center">
+Jumlah Skill Dinilai
 </th>
 
-<th>
-Kompetensi
+<th width="25%" class="center">
+Rata-rata Nilai
 </th>
 
-<th
-    width="10%"
-    class="center"
->
-Nilai
-</th>
-
-<th width="18%">
-Assessor
-</th>
-
-<th width="25%">
-Catatan
+<th width="25%" class="center">
+Perubahan
 </th>
 
 </tr>
@@ -2341,44 +2906,57 @@ Catatan
 
 <tbody>
 
-<?php if (
-    $history_result &&
-    $history_result->num_rows > 0
-): ?>
+<?php
+
+$years_asc =
+    $years;
+
+sort(
+    $years_asc
+);
 
 
-<?php while (
-    $h = $history_result->fetch_assoc()
+$previous_average = null;
+
+?>
+
+
+<?php foreach (
+    $years_asc
+    as $year
 ): ?>
+
+<?php
+
+$average =
+    $year_summary[$year]
+    ?? null;
+
+
+$change = null;
+
+
+if (
+    $average !== null
+    &&
+    $previous_average !== null
+) {
+
+    $change =
+        $average -
+        $previous_average;
+
+}
+
+?>
+
 
 <tr>
 
 <td>
 
-<?= e_pdf(
-    $h['tahun']
-) ?>
-
-</td>
-
-
-<td>
-
-<?= tanggal_pdf(
-    $h['tanggal_penilaian']
-) ?>
-
-</td>
-
-
-<td>
-
 <strong>
-
-<?= e_pdf(
-    $h['nama_skill']
-) ?>
-
+<?= e_pdf($year) ?>
 </strong>
 
 </td>
@@ -2386,58 +2964,112 @@ Catatan
 
 <td class="center">
 
+<?php
+
+$count_year = 0;
+
+foreach ($history as $item) {
+
+    if (
+        isset(
+            $item['years'][$year]
+        )
+        &&
+        $item['years'][$year]['nilai']
+        !== null
+    ) {
+
+        $count_year++;
+
+    }
+
+}
+
+?>
+
+<?= number_format(
+    $count_year
+) ?>
+
+</td>
+
+
+<td class="center">
+
+<?php if ($average !== null): ?>
+
 <strong>
 
 <?= number_format(
-    (float)$h['nilai'],
-    0
+    $average,
+    2
 ) ?>
 
 </strong>
 
  / 5
 
+<?php else: ?>
+
+-
+
+<?php endif; ?>
+
 </td>
 
 
-<td>
+<td class="center">
 
-<?= e_pdf(
-    $h['assessor'] ?: '-'
+<?php if ($change === null): ?>
+
+-
+
+<?php elseif ($change > 0): ?>
+
+<strong style="color:#176b3a;">
+
++<?= number_format(
+    $change,
+    2
 ) ?>
 
-</td>
+</strong>
 
+<?php elseif ($change < 0): ?>
 
-<td>
+<strong style="color:#a52834;">
 
-<?= e_pdf(
-    $h['catatan'] ?: '-'
+<?= number_format(
+    $change,
+    2
 ) ?>
 
-</td>
-
-</tr>
-
-<?php endwhile; ?>
-
+</strong>
 
 <?php else: ?>
 
-<tr>
+0.00
 
-<td
-    colspan="6"
-    class="no-data"
->
-
-Belum ada riwayat penilaian.
+<?php endif; ?>
 
 </td>
 
 </tr>
 
-<?php endif; ?>
+
+<?php
+
+if ($average !== null) {
+
+    $previous_average =
+        $average;
+
+}
+
+?>
+
+
+<?php endforeach; ?>
 
 </tbody>
 
@@ -2447,13 +3079,13 @@ Belum ada riwayat penilaian.
 
 
 <!-- =====================================================
-     06 RIWAYAT TRAINING
+     08 RIWAYAT TRAINING
 ===================================================== -->
 
 <div class="section">
 
 <div class="section-title">
-06 &nbsp; Riwayat Training
+08 &nbsp; Riwayat Training
 </div>
 
 
@@ -2466,7 +3098,7 @@ Belum ada riwayat penilaian.
 
 <tr>
 
-<th>
+<th width="30%">
 Training
 </th>
 
@@ -2478,7 +3110,7 @@ Tanggal
 Trainer
 </th>
 
-<th width="17%">
+<th width="15%">
 Lokasi
 </th>
 
@@ -2494,7 +3126,51 @@ Status
 <tbody>
 
 
-<?php foreach ($training_data as $t): ?>
+<?php foreach (
+    $training_data
+    as $t
+): ?>
+
+<?php
+
+$status_training =
+    $t['status_training']
+    ?? '';
+
+
+if (
+    $status_training
+    === 'Selesai'
+) {
+
+    $training_class =
+        'good';
+
+} elseif (
+    $status_training
+    === 'Dibatalkan'
+) {
+
+    $training_class =
+        'bad';
+
+} elseif (
+    $status_training
+    === 'Sedang Berlangsung'
+) {
+
+    $training_class =
+        'warning';
+
+} else {
+
+    $training_class =
+        'neutral';
+
+}
+
+?>
+
 
 <tr>
 
@@ -2518,7 +3194,11 @@ Status
 ) ?>
 
 
-<?php if (!empty($t['tanggal_selesai'])): ?>
+<?php if (
+    !empty(
+        $t['tanggal_selesai']
+    )
+): ?>
 
 &nbsp;s/d&nbsp;
 
@@ -2534,7 +3214,8 @@ Status
 <td>
 
 <?= e_pdf(
-    $t['trainer'] ?: '-'
+    $t['trainer']
+    ?: '-'
 ) ?>
 
 </td>
@@ -2543,7 +3224,8 @@ Status
 <td>
 
 <?= e_pdf(
-    $t['lokasi'] ?: '-'
+    $t['lokasi']
+    ?: '-'
 ) ?>
 
 </td>
@@ -2551,46 +3233,19 @@ Status
 
 <td>
 
-<?php
-
-$status_training =
-    $t['status_training']
-    ?? '';
-
-
-if ($status_training === 'Selesai') {
-
-    $training_class = 'good';
-
-} elseif ($status_training === 'Dibatalkan') {
-
-    $training_class = 'bad';
-
-} elseif ($status_training === 'Sedang Berlangsung') {
-
-    $training_class = 'warning';
-
-} else {
-
-    $training_class = 'neutral';
-
-}
-
-?>
-
-
-<span
-    class="status status-<?= e_pdf(
+<span class="
+    status
+    status-<?= e_pdf(
         $training_class
-    ) ?>"
->
+    ) ?>
+">
 
 <?= e_pdf(
-    $status_training ?: 'Terjadwal'
+    $status_training
+    ?: 'Terjadwal'
 ) ?>
 
 </span>
-
 
 </td>
 
@@ -2606,13 +3261,11 @@ if ($status_training === 'Selesai') {
 
 <?php else: ?>
 
-
-<div class="no-data">
+<div class="empty">
 
 Belum ada riwayat training.
 
 </div>
-
 
 <?php endif; ?>
 
@@ -2633,9 +3286,12 @@ Belum ada riwayat training.
 Dibuat oleh,
 </div>
 
+
 <div class="signature-space"></div>
 
+
 <div class="signature-line"></div>
+
 
 <div class="small">
 Skill Monitoring / HR
@@ -2650,9 +3306,12 @@ Skill Monitoring / HR
 Diverifikasi oleh,
 </div>
 
+
 <div class="signature-space"></div>
 
+
 <div class="signature-line"></div>
+
 
 <div class="small">
 Supervisor / Atasan
@@ -2671,19 +3330,20 @@ Supervisor / Atasan
 
 <div class="footer">
 
-<table width="100%">
+<table class="footer-table">
 
 <tr>
 
-<td class="footer-left">
+<td>
 
 Garudafood Skill Monitoring System
 
 </td>
 
+
 <td class="footer-right">
 
-Dokumen dibuat secara otomatis oleh sistem
+Dokumen dibuat otomatis oleh sistem
 
 </td>
 
@@ -2700,14 +3360,16 @@ Dokumen dibuat secara otomatis oleh sistem
 
 <?php
 
-$html = ob_get_clean();
+$html =
+    ob_get_clean();
 
 
 /* =========================================================
    DOMPDF OPTIONS
 ========================================================= */
 
-$options = new Options();
+$options =
+    new Options();
 
 
 $options->set(
@@ -2732,9 +3394,10 @@ $options->set(
    CREATE PDF
 ========================================================= */
 
-$dompdf = new Dompdf(
-    $options
-);
+$dompdf =
+    new Dompdf(
+        $options
+    );
 
 
 $dompdf->loadHtml(
@@ -2756,15 +3419,17 @@ $dompdf->render();
    NAMA FILE
 ========================================================= */
 
-$nama_pekerja = preg_replace(
-    '/[^A-Za-z0-9_-]/',
-    '_',
-    $pekerja['nama'] ?? 'Pekerja'
-);
+$nama_pekerja =
+    preg_replace(
+        '/[^A-Za-z0-9_-]/',
+        '_',
+        $pekerja['nama']
+        ?? 'Pekerja'
+    );
 
 
 $nama_file =
-    'Laporan_Kompetensi_' .
+    'Laporan_Detail_Pekerja_' .
     $nama_pekerja .
     '_' .
     $tahun_terbaru .

@@ -12,6 +12,13 @@ require __DIR__ . '/../partials/header.php';
 /* =========================================================
    DATA PERKEMBANGAN PEKERJA
 
+   URUTAN:
+   1. Peningkatan terbesar
+   2. Peningkatan berikutnya
+   3. Nilai tetap
+   4. Penurunan
+   5. Belum lengkap
+
    Struktur database:
    - pekerja.id
    - pekerja.nama
@@ -63,6 +70,48 @@ $rows = $conn->query("
         p.nama
 
     ORDER BY
+
+        /* =================================================
+           PEKERJA YANG MEMILIKI 2025 & 2026
+           DIURUTKAN BERDASARKAN PENINGKATAN TERBESAR
+        ================================================= */
+
+        CASE
+            WHEN
+                AVG(
+                    CASE
+                        WHEN ps.tahun = 2025
+                        THEN ps.nilai
+                    END
+                ) IS NOT NULL
+                AND
+                AVG(
+                    CASE
+                        WHEN ps.tahun = 2026
+                        THEN ps.nilai
+                    END
+                ) IS NOT NULL
+            THEN 0
+
+            ELSE 1
+        END ASC,
+
+        (
+            AVG(
+                CASE
+                    WHEN ps.tahun = 2026
+                    THEN ps.nilai
+                END
+            )
+            -
+            AVG(
+                CASE
+                    WHEN ps.tahun = 2025
+                    THEN ps.nilai
+                END
+            )
+        ) DESC,
+
         p.nama ASC
 ");
 
@@ -105,17 +154,21 @@ if ($chart) {
    STATISTIK
 ========================================================= */
 
-$totalWorkers = 0;
-$totalIncrease = 0;
-$totalDecrease = 0;
-$totalSame = 0;
-$totalIncomplete = 0;
+$totalWorkers     = 0;
+$totalIncrease     = 0;
+$totalDecrease     = 0;
+$totalSame         = 0;
+$totalIncomplete   = 0;
 
 
 $qTotalWorkers = $conn->query("
-    SELECT COUNT(*) AS total
+    SELECT
+        COUNT(*) AS total
+
     FROM pekerja
-    WHERE status = 'Aktif'
+
+    WHERE
+        status = 'Aktif'
 ");
 
 
@@ -124,7 +177,7 @@ if ($qTotalWorkers) {
     $rw = $qTotalWorkers->fetch_assoc();
 
     $totalWorkers =
-        (int)($rw['total'] ?? 0);
+        (int) ($rw['total'] ?? 0);
 
 }
 
@@ -147,12 +200,14 @@ if ($rows) {
             $temp['y26'] !== null &&
             $temp['y26'] !== '';
 
+
         if ($has25 && $has26) {
 
             $delta =
-                (float)$temp['y26']
+                (float) $temp['y26']
                 -
-                (float)$temp['y25'];
+                (float) $temp['y25'];
+
 
             if ($delta > 0) {
 
@@ -881,8 +936,6 @@ if ($rows) {
 
 <div class="skill-hero">
 
-    <!-- DEKORASI -->
-
     <div
         class="skill-hero-circle skill-hero-circle-1"
     ></div>
@@ -895,8 +948,6 @@ if ($rows) {
         class="skill-hero-circle skill-hero-circle-3"
     ></div>
 
-
-    <!-- CONTENT -->
 
     <div class="skill-hero-content">
 
@@ -1141,8 +1192,8 @@ if ($rows) {
 
             <div class="section-note">
 
-                Perbandingan rata-rata nilai skill
-                tahun 2025 dan 2026.
+                Pekerja dengan peningkatan terbesar
+                ditampilkan paling atas.
 
             </div>
 
@@ -1780,9 +1831,7 @@ if ($rows) {
             class="empty-state"
         >
 
-            <div
-                class="empty-state-icon"
-            >
+            <div class="empty-state-icon">
 
                 <i
                     class="
@@ -1830,7 +1879,6 @@ if ($rows) {
 document.addEventListener(
     "DOMContentLoaded",
     function () {
-
 
         const canvas =
             document.getElementById(
