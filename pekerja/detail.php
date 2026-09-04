@@ -2,16 +2,23 @@
 
 $page_title = 'Detail Pekerja';
 
+/* =========================================================
+   HEADER / DATABASE CONNECTION
+========================================================= */
 /*
-|--------------------------------------------------------------------------
-| HEADER / DATABASE CONNECTION
-|--------------------------------------------------------------------------
-| header.php menyediakan koneksi $conn dan helper aplikasi.
-| Output dibuffer agar proses redirect POST tetap aman.
-*/
+ * header.php pada project ini menyediakan koneksi database
+ * melalui variable $conn serta helper aplikasi.
+ *
+ * Harus dipanggil SEBELUM semua query database dan SEBELUM
+ * proses POST agar $conn sudah tersedia.
+ */
 ob_start();
-
 require __DIR__ . '/../partials/header.php';
+
+/* Pastikan koneksi benar-benar tersedia. */
+if (!isset($conn) || !($conn instanceof mysqli)) {
+    die('Koneksi database tidak tersedia. Pastikan partials/header.php menyediakan $conn.');
+}
 
 
 /* =========================================================
@@ -27,10 +34,10 @@ if ($id <= 0) {
 
 
 /* =========================================================
-   HELPER
+   HELPER REDIRECT
 ========================================================= */
 
-function redirectDetail($id, $type, $message = '')
+function redirectDetail($id, $type, $message = '', $focusSkill = 0)
 {
     $url = 'detail.php?id=' . (int) $id . '&' . $type . '=1';
 
@@ -38,19 +45,17 @@ function redirectDetail($id, $type, $message = '')
         $url .= '&msg=' . urlencode($message);
     }
 
+    /*
+     * Setelah POST berhasil, kembalikan user ke baris skill yang sama.
+     * Hash dipakai sebagai anchor sehingga browser tidak hanya mengandalkan
+     * posisi scroll pixel yang bisa berubah setelah halaman di-render ulang.
+     */
+    if ((int) $focusSkill > 0) {
+        $url .= '#skill-row-' . (int) $focusSkill;
+    }
+
     header('Location: ' . $url);
     exit;
-}
-
-
-/* =========================================================
-   CEK KONEKSI
-========================================================= */
-
-if (!isset($conn) || !($conn instanceof mysqli)) {
-    die(
-        'Koneksi database tidak tersedia. Pastikan partials/header.php menyediakan $conn.'
-    );
 }
 
 
@@ -78,6 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $assessor  = trim($_POST['assessor'] ?? '');
         $catatan   = trim($_POST['catatan'] ?? '');
 
+
         if ($id_pekerja <= 0 || $id_pekerja !== $id) {
             redirectDetail(
                 $id,
@@ -85,6 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'Data pekerja tidak valid.'
             );
         }
+
 
         if ($id_skill <= 0) {
             redirectDetail(
@@ -94,6 +101,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
         }
 
+
         if ($tahun < 2000 || $tahun > 2100) {
             redirectDetail(
                 $id,
@@ -101,6 +109,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'Tahun assessment tidak valid.'
             );
         }
+
 
         if ($nilai_raw === '' || !is_numeric($nilai_raw)) {
             redirectDetail(
@@ -110,7 +119,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
         }
 
+
         $nilai = (float) $nilai_raw;
+
 
         if ($nilai < 0 || $nilai > 5) {
             redirectDetail(
@@ -120,49 +131,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
         }
 
+
         if ($tanggal === '') {
             $tanggal = date('Y-m-d');
         }
 
 
-        /* -------------------------------------------------
-           CEK SKILL
-        ------------------------------------------------- */
-
-        $stmt = $conn->prepare("
-            SELECT id
-            FROM skill
-            WHERE id = ?
-              AND status = 'Aktif'
-            LIMIT 1
-        ");
-
-        if (!$stmt) {
-            redirectDetail(
-                $id,
-                'error',
-                'Gagal memeriksa skill: ' . $conn->error
-            );
-        }
-
-        $stmt->bind_param('i', $id_skill);
-        $stmt->execute();
-
-        $skill_exists = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
-
-        if (!$skill_exists) {
-            redirectDetail(
-                $id,
-                'error',
-                'Skill tidak ditemukan atau tidak aktif.'
-            );
-        }
-
-
-        /* -------------------------------------------------
-           CEK DUPLIKAT
-        ------------------------------------------------- */
+        /* CEK DUPLIKAT */
 
         $stmt = $conn->prepare("
             SELECT id
@@ -178,9 +153,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirectDetail(
                 $id,
                 'error',
-                'Gagal memeriksa data assessment: ' . $conn->error
+                'Gagal memeriksa data assessment.'
             );
         }
+
 
         $stmt->bind_param(
             'iii',
@@ -192,7 +168,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->execute();
 
         $cek = $stmt->get_result()->fetch_assoc();
+
         $stmt->close();
+
 
         if ($cek) {
             redirectDetail(
@@ -203,9 +181,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
 
-        /* -------------------------------------------------
-           INSERT
-        ------------------------------------------------- */
+        /* INSERT */
 
         $stmt = $conn->prepare("
             INSERT INTO penilaian_skill
@@ -225,9 +201,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirectDetail(
                 $id,
                 'error',
-                'Gagal menyiapkan penyimpanan assessment: ' . $conn->error
+                'Gagal menyiapkan penyimpanan assessment.'
             );
         }
+
 
         $stmt->bind_param(
             'iiidsss',
@@ -240,6 +217,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $catatan
         );
 
+
         if ($stmt->execute()) {
 
             $stmt->close();
@@ -247,12 +225,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirectDetail(
                 $id,
                 'saved',
-                'Nilai assessment berhasil ditambahkan.'
+                'Nilai assessment berhasil ditambahkan.',
+                $id_skill
             );
         }
 
+
         $error = $stmt->error;
+
         $stmt->close();
+
 
         redirectDetail(
             $id,
@@ -263,7 +245,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
     /* =====================================================
-       EDIT NILAI TERBARU
+       EDIT NILAI TERBARU PER SKILL
     ===================================================== */
 
     if ($action === 'edit_skill') {
@@ -275,6 +257,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $assessor  = trim($_POST['assessor'] ?? '');
         $catatan   = trim($_POST['catatan'] ?? '');
 
+
         if ($id_penilaian <= 0) {
             redirectDetail(
                 $id,
@@ -282,6 +265,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'Data assessment tidak valid.'
             );
         }
+
 
         if ($nilai_raw === '' || !is_numeric($nilai_raw)) {
             redirectDetail(
@@ -291,7 +275,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
         }
 
+
         $nilai = (float) $nilai_raw;
+
 
         if ($nilai < 0 || $nilai > 5) {
             redirectDetail(
@@ -301,14 +287,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
         }
 
+
         if ($tanggal === '') {
             $tanggal = date('Y-m-d');
         }
 
 
-        /* -------------------------------------------------
-           PASTIKAN MILIK PEKERJA
-        ------------------------------------------------- */
+        /* CEK ASSESSMENT */
 
         $stmt = $conn->prepare("
             SELECT
@@ -325,9 +310,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirectDetail(
                 $id,
                 'error',
-                'Gagal memeriksa assessment: ' . $conn->error
+                'Gagal memeriksa assessment.'
             );
         }
+
 
         $stmt->bind_param(
             'ii',
@@ -338,7 +324,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->execute();
 
         $assessment = $stmt->get_result()->fetch_assoc();
+
         $stmt->close();
+
 
         if (!$assessment) {
             redirectDetail(
@@ -349,9 +337,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
 
-        /* -------------------------------------------------
-           UPDATE
-        ------------------------------------------------- */
+        /* UPDATE */
 
         $stmt = $conn->prepare("
             UPDATE penilaian_skill
@@ -368,9 +354,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirectDetail(
                 $id,
                 'error',
-                'Gagal menyiapkan update assessment: ' . $conn->error
+                'Gagal menyiapkan update assessment.'
             );
         }
+
 
         $stmt->bind_param(
             'dsssii',
@@ -382,6 +369,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id
         );
 
+
         if ($stmt->execute()) {
 
             $stmt->close();
@@ -389,12 +377,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirectDetail(
                 $id,
                 'updated',
-                'Nilai assessment berhasil diperbarui.'
+                'Nilai assessment berhasil diperbarui.',
+                (int) $assessment['id_skill']
             );
         }
 
+
         $error = $stmt->error;
+
         $stmt->close();
+
 
         redirectDetail(
             $id,
@@ -405,12 +397,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
     /* =====================================================
-       HAPUS NILAI ASSESSMENT
+       HAPUS NILAI TERBARU PER SKILL
     ===================================================== */
 
     if ($action === 'delete_skill') {
 
         $id_penilaian = (int) ($_POST['id_penilaian'] ?? 0);
+
 
         if ($id_penilaian <= 0) {
             redirectDetail(
@@ -421,32 +414,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
 
-        /* -------------------------------------------------
-           PASTIKAN ASSESSMENT MILIK PEKERJA
-        ------------------------------------------------- */
+        /*
+         * Pastikan data assessment memang milik
+         * pekerja yang sedang dibuka.
+         */
 
         $stmt = $conn->prepare("
             SELECT
-                ps.id,
-                ps.id_skill,
-                ps.tahun,
-                ps.nilai,
-                s.nama_skill
-            FROM penilaian_skill ps
-            LEFT JOIN skill s
-                ON s.id = ps.id_skill
-            WHERE ps.id = ?
-              AND ps.id_pekerja = ?
+                id,
+                id_skill,
+                tahun,
+                nilai
+            FROM penilaian_skill
+            WHERE id = ?
+              AND id_pekerja = ?
             LIMIT 1
         ");
+
 
         if (!$stmt) {
             redirectDetail(
                 $id,
                 'error',
-                'Gagal memeriksa data assessment: ' . $conn->error
+                'Gagal memeriksa data assessment.'
             );
         }
+
 
         $stmt->bind_param(
             'ii',
@@ -457,7 +450,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->execute();
 
         $assessment = $stmt->get_result()->fetch_assoc();
+
         $stmt->close();
+
 
         if (!$assessment) {
             redirectDetail(
@@ -468,9 +463,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
 
-        /* -------------------------------------------------
-           DELETE
-        ------------------------------------------------- */
+        /*
+         * Pastikan ID yang dihapus adalah nilai TERBARU
+         * dari skill tersebut.
+         */
+
+        $stmt = $conn->prepare("
+            SELECT
+                id
+            FROM penilaian_skill
+            WHERE id_pekerja = ?
+              AND id_skill = ?
+            ORDER BY tahun DESC, id DESC
+            LIMIT 1
+        ");
+
+
+        if (!$stmt) {
+            redirectDetail(
+                $id,
+                'error',
+                'Gagal memeriksa nilai terbaru skill.'
+            );
+        }
+
+
+        $id_skill_check = (int) $assessment['id_skill'];
+
+
+        $stmt->bind_param(
+            'ii',
+            $id,
+            $id_skill_check
+        );
+
+        $stmt->execute();
+
+        $latest_check = $stmt->get_result()->fetch_assoc();
+
+        $stmt->close();
+
+
+        if (
+            !$latest_check ||
+            (int) $latest_check['id'] !== $id_penilaian
+        ) {
+
+            redirectDetail(
+                $id,
+                'error',
+                'Hanya nilai terbaru dari skill yang dapat dihapus.'
+            );
+        }
+
+
+        /*
+         * HAPUS DATA
+         */
 
         $stmt = $conn->prepare("
             DELETE FROM penilaian_skill
@@ -479,13 +528,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             LIMIT 1
         ");
 
+
         if (!$stmt) {
             redirectDetail(
                 $id,
                 'error',
-                'Gagal menyiapkan penghapusan assessment: ' . $conn->error
+                'Gagal menyiapkan proses penghapusan.'
             );
         }
+
 
         $stmt->bind_param(
             'ii',
@@ -493,43 +544,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id
         );
 
+
         if ($stmt->execute()) {
 
             $affected = $stmt->affected_rows;
+
             $stmt->close();
 
+
             if ($affected > 0) {
-
-                $nama_skill =
-                    $assessment['nama_skill']
-                    ?: 'Skill';
-
-                $tahun_assessment =
-                    (int) $assessment['tahun'];
 
                 redirectDetail(
                     $id,
                     'deleted',
-                    'Nilai ' . $nama_skill .
-                    ' tahun ' . $tahun_assessment .
-                    ' berhasil dihapus.'
+                    'Nilai assessment berhasil dihapus.',
+                    $id_skill_check
                 );
+
             }
+
 
             redirectDetail(
                 $id,
                 'error',
-                'Data assessment tidak berhasil dihapus.'
+                'Nilai assessment tidak berhasil dihapus.'
             );
         }
 
+
         $error = $stmt->error;
+
         $stmt->close();
+
 
         redirectDetail(
             $id,
             'error',
-            'Gagal menghapus nilai: ' . $error
+            'Gagal menghapus nilai assessment: ' . $error
         );
     }
 
@@ -541,7 +592,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'edit_training') {
 
         $id_peserta = (int) ($_POST['id_peserta'] ?? 0);
-        $hasil      = trim($_POST['hasil_training'] ?? '');
+
+        $hasil = trim(
+            $_POST['hasil_training'] ?? ''
+        );
+
 
         if ($id_peserta <= 0) {
             redirectDetail(
@@ -552,9 +607,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
 
-        /* -------------------------------------------------
-           DETEKSI KOLOM HASIL TRAINING
-        ------------------------------------------------- */
+        /* CARI KOLOM HASIL TRAINING */
 
         $training_columns = [];
 
@@ -562,12 +615,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             SHOW COLUMNS FROM training_peserta
         ");
 
+
         if ($columns_result) {
 
             while ($column = $columns_result->fetch_assoc()) {
-                $training_columns[] = $column['Field'];
+
+                $training_columns[] =
+                    $column['Field'];
             }
         }
+
 
         $candidate_columns = [
             'nilai',
@@ -577,7 +634,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'hasil_training'
         ];
 
+
         $result_column = null;
+
 
         foreach ($candidate_columns as $candidate) {
 
@@ -588,10 +647,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     true
                 )
             ) {
+
                 $result_column = $candidate;
+
                 break;
             }
         }
+
 
         if (!$result_column) {
             redirectDetail(
@@ -602,9 +664,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
 
-        /* -------------------------------------------------
-           PASTIKAN PESERTA MILIK PEKERJA
-        ------------------------------------------------- */
+        /* CEK PESERTA */
 
         $stmt = $conn->prepare("
             SELECT id
@@ -614,14 +674,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             LIMIT 1
         ");
 
+
         if (!$stmt) {
             redirectDetail(
                 $id,
                 'error',
-                'Gagal memeriksa data peserta training: ' .
-                $conn->error
+                'Gagal memeriksa data peserta training.'
             );
         }
+
 
         $stmt->bind_param(
             'ii',
@@ -636,6 +697,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $stmt->close();
 
+
         if (!$cek_training) {
             redirectDetail(
                 $id,
@@ -645,10 +707,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
 
-        /* -------------------------------------------------
-           UPDATE
-        ------------------------------------------------- */
-
         $sql = "
             UPDATE training_peserta
             SET `$result_column` = ?
@@ -656,16 +714,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               AND id_pekerja = ?
         ";
 
+
         $stmt = $conn->prepare($sql);
+
 
         if (!$stmt) {
             redirectDetail(
                 $id,
                 'error',
-                'Gagal menyiapkan update training: ' .
-                $conn->error
+                'Gagal menyiapkan update training.'
             );
         }
+
 
         $stmt->bind_param(
             'sii',
@@ -673,6 +733,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id_peserta,
             $id
         );
+
 
         if ($stmt->execute()) {
 
@@ -685,8 +746,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
         }
 
+
         $error = $stmt->error;
+
         $stmt->close();
+
 
         redirectDetail(
             $id,
@@ -698,45 +762,62 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
 /* =========================================================
+   HEADER
+========================================================= */
+
+
+
+
+/* =========================================================
    PESAN
 ========================================================= */
 
 $success_message = '';
 $error_message   = '';
 
+
 if (isset($_GET['saved'])) {
 
     $success_message =
         $_GET['msg']
-        ?? 'Nilai assessment berhasil ditambahkan.';
+        ??
+        'Nilai assessment berhasil ditambahkan.';
 }
+
 
 if (isset($_GET['updated'])) {
 
     $success_message =
         $_GET['msg']
-        ?? 'Nilai assessment berhasil diperbarui.';
+        ??
+        'Nilai assessment berhasil diperbarui.';
 }
+
 
 if (isset($_GET['deleted'])) {
 
     $success_message =
         $_GET['msg']
-        ?? 'Nilai assessment berhasil dihapus.';
+        ??
+        'Nilai assessment berhasil dihapus.';
 }
+
 
 if (isset($_GET['training_updated'])) {
 
     $success_message =
         $_GET['msg']
-        ?? 'Hasil training berhasil diperbarui.';
+        ??
+        'Hasil training berhasil diperbarui.';
 }
+
 
 if (isset($_GET['error'])) {
 
     $error_message =
         $_GET['msg']
-        ?? 'Terjadi kesalahan.';
+        ??
+        'Terjadi kesalahan.';
 }
 
 
@@ -751,14 +832,21 @@ $stmt = $conn->prepare("
     LIMIT 1
 ");
 
+
 if (!$stmt) {
+
     die(
         'Query pekerja gagal: ' .
         htmlspecialchars($conn->error)
     );
 }
 
-$stmt->bind_param('i', $id);
+
+$stmt->bind_param(
+    'i',
+    $id
+);
+
 $stmt->execute();
 
 $pekerja =
@@ -766,8 +854,11 @@ $pekerja =
 
 $stmt->close();
 
+
 if (!$pekerja) {
+
     header('Location: index.php');
+
     exit;
 }
 
@@ -778,6 +869,7 @@ if (!$pekerja) {
 
 $skills = [];
 
+
 $result = $conn->query("
     SELECT
         id,
@@ -787,19 +879,22 @@ $result = $conn->query("
     ORDER BY nama_skill ASC
 ");
 
+
 if ($result) {
 
     while ($row = $result->fetch_assoc()) {
+
         $skills[] = $row;
     }
 }
 
 
 /* =========================================================
-   RIWAYAT ASSESSMENT
+   SEMUA RIWAYAT ASSESSMENT
 ========================================================= */
 
 $assessment_data = [];
+
 
 $stmt = $conn->prepare("
     SELECT
@@ -821,21 +916,31 @@ $stmt = $conn->prepare("
         ps.id DESC
 ");
 
+
 if (!$stmt) {
+
     die(
         'Query assessment gagal: ' .
         htmlspecialchars($conn->error)
     );
 }
 
-$stmt->bind_param('i', $id);
+
+$stmt->bind_param(
+    'i',
+    $id
+);
+
 $stmt->execute();
 
 $result = $stmt->get_result();
 
+
 while ($row = $result->fetch_assoc()) {
+
     $assessment_data[] = $row;
 }
+
 
 $stmt->close();
 
@@ -846,44 +951,45 @@ $stmt->close();
 
 $years = [];
 
+
 foreach ($assessment_data as $row) {
 
     $tahun = (int) $row['tahun'];
 
     if ($tahun > 0) {
+
         $years[$tahun] = $tahun;
     }
 }
 
+
 $years = array_values($years);
 
-sort($years);
+/* Tahun lama di kiri, tahun terbaru selalu di kanan. */
+sort($years, SORT_NUMERIC);
 
 
 /* =========================================================
-   MATRIX HISTORY
+   MATRIX NILAI
 ========================================================= */
 
 $history_matrix = [];
 
+
 foreach ($assessment_data as $row) {
 
     $skill_id = (int) $row['id_skill'];
-    $tahun    = (int) $row['tahun'];
+
+    $tahun = (int) $row['tahun'];
+
 
     if (!isset($history_matrix[$skill_id])) {
+
         $history_matrix[$skill_id] = [];
     }
 
-    /*
-     * Jika ada data ganda untuk skill + tahun,
-     * ambil ID paling besar / data terbaru.
-     */
-    if (
-        !isset(
-            $history_matrix[$skill_id][$tahun]
-        )
-    ) {
+
+    if (!isset($history_matrix[$skill_id][$tahun])) {
 
         $history_matrix[$skill_id][$tahun] = $row;
     }
@@ -896,15 +1002,18 @@ foreach ($assessment_data as $row) {
 
 $latest_skill = [];
 
+
 foreach ($skills as $skill) {
 
     $skill_id = (int) $skill['id'];
 
     $latest_skill[$skill_id] = null;
 
+
     if (
         isset($history_matrix[$skill_id])
-        && !empty($history_matrix[$skill_id])
+        &&
+        !empty($history_matrix[$skill_id])
     ) {
 
         $skill_years =
@@ -914,25 +1023,29 @@ foreach ($skills as $skill) {
 
         rsort($skill_years);
 
+        $latest_year =
+            $skill_years[0];
+
         $latest_skill[$skill_id] =
-            $history_matrix[$skill_id][$skill_years[0]];
+            $history_matrix[$skill_id][$latest_year];
     }
 }
 
 
 /* =========================================================
-   TAHUN
+   TAHUN TERBARU
 ========================================================= */
 
 $tahun_terbaru = !empty($years)
     ? (int) end($years)
     : (int) date('Y');
 
+
 $tahun_baru = $tahun_terbaru + 1;
 
 
 /* =========================================================
-   STATISTIK & MAPPING
+   STATISTIK
 ========================================================= */
 
 $total_skill       = 0;
@@ -943,26 +1056,29 @@ $total_training    = 0;
 $total_actual = 0;
 $total_target = 0;
 
+
 $skill_mapping = [];
+
 
 foreach ($skills as $skill) {
 
     $skill_id = (int) $skill['id'];
 
     $latest =
-        $latest_skill[$skill_id] ?? null;
+        $latest_skill[$skill_id]
+        ?? null;
 
-    /*
-     * Target default = 3.
-     */
     $target = 3;
+
 
     if (
         $latest
-        && $latest['nilai'] !== null
+        &&
+        $latest['nilai'] !== null
     ) {
 
-        $actual = (float) $latest['nilai'];
+        $actual =
+            (float) $latest['nilai'];
 
         $gap =
             max(
@@ -970,51 +1086,83 @@ foreach ($skills as $skill) {
                 $target - $actual
             );
 
+
         if ($gap >= 2) {
 
-            $status = 'Perlu Training';
-            $status_class = 'status-bad';
+            $status =
+                'Perlu Training';
+
+            $status_class =
+                'status-bad';
 
             $total_training++;
 
         } elseif ($gap > 0) {
 
-            $status = 'Perlu Peningkatan';
-            $status_class = 'status-warning';
+            $status =
+                'Perlu Peningkatan';
+
+            $status_class =
+                'status-warning';
 
             $total_peningkatan++;
 
         } else {
 
-            $status = 'Kompeten';
-            $status_class = 'status-good';
+            $status =
+                'Kompeten';
+
+            $status_class =
+                'status-good';
 
             $total_kompeten++;
         }
 
+
         $total_skill++;
 
         $total_actual += $actual;
+
         $total_target += $target;
 
     } else {
 
         $actual = null;
+
         $gap = null;
 
-        $status = 'Belum Dinilai';
-        $status_class = 'status-neutral';
+        $status =
+            'Belum Dinilai';
+
+        $status_class =
+            'status-neutral';
     }
 
+
     $skill_mapping[] = [
-        'id_skill'     => $skill_id,
-        'nama_skill'   => $skill['nama_skill'],
-        'latest'       => $latest,
-        'actual'       => $actual,
-        'target'       => $target,
-        'gap'          => $gap,
-        'status'       => $status,
-        'status_class' => $status_class
+        'id_skill' =>
+            $skill_id,
+
+        'nama_skill' =>
+            $skill['nama_skill'],
+
+        'latest' =>
+            $latest,
+
+        'actual' =>
+            $actual,
+
+        'target' =>
+            $target,
+
+        'gap' =>
+            $gap,
+
+        'status' =>
+            $status,
+
+        'status_class' =>
+            $status_class
     ];
 }
 
@@ -1028,6 +1176,7 @@ $rata_rata =
         ? $total_actual / $total_skill
         : 0;
 
+
 $rata_target =
     $total_skill > 0
         ? $total_target / $total_skill
@@ -1040,44 +1189,60 @@ $rata_target =
 
 if ($total_training > 0) {
 
-    $overall_status = 'Perlu Training';
-    $overall_class = 'status-bad';
+    $overall_status =
+        'Perlu Training';
+
+    $overall_class =
+        'status-bad';
 
 } elseif ($total_peningkatan > 0) {
 
-    $overall_status = 'Perlu Peningkatan';
-    $overall_class = 'status-warning';
+    $overall_status =
+        'Perlu Peningkatan';
+
+    $overall_class =
+        'status-warning';
 
 } elseif ($total_skill > 0) {
 
-    $overall_status = 'Kompeten';
-    $overall_class = 'status-good';
+    $overall_status =
+        'Kompeten';
+
+    $overall_class =
+        'status-good';
 
 } else {
 
-    $overall_status = 'Belum Dinilai';
-    $overall_class = 'status-neutral';
+    $overall_status =
+        'Belum Dinilai';
+
+    $overall_class =
+        'status-neutral';
 }
 
 
 /* =========================================================
-   DATA CHART
+   DATA GRAFIK PER SKILL
 ========================================================= */
 
 $chart_data = [];
 
+
 foreach ($skills as $skill) {
 
-    $skill_id = (int) $skill['id'];
+    $skill_id =
+        (int) $skill['id'];
 
     $labels = [];
     $values = [];
     $dates = [];
     $assessors = [];
 
+
     if (
         isset($history_matrix[$skill_id])
-        && !empty($history_matrix[$skill_id])
+        &&
+        !empty($history_matrix[$skill_id])
     ) {
 
         $skill_years =
@@ -1087,17 +1252,22 @@ foreach ($skills as $skill) {
 
         sort($skill_years);
 
+
         foreach ($skill_years as $tahun) {
 
             $data =
                 $history_matrix[$skill_id][$tahun];
 
-            $labels[] = (string) $tahun;
+
+            $labels[] =
+                (string) $tahun;
+
 
             $values[] =
                 $data['nilai'] !== null
                     ? (float) $data['nilai']
                     : null;
+
 
             $dates[] =
                 !empty($data['tanggal_penilaian'])
@@ -1109,17 +1279,28 @@ foreach ($skills as $skill) {
                     )
                     : '-';
 
+
             $assessors[] =
                 $data['assessor'] ?? '';
         }
     }
 
+
     $chart_data[$skill_id] = [
-        'nama'     => $skill['nama_skill'],
-        'labels'   => $labels,
-        'values'   => $values,
-        'dates'    => $dates,
-        'assessors' => $assessors
+        'nama' =>
+            $skill['nama_skill'],
+
+        'labels' =>
+            $labels,
+
+        'values' =>
+            $values,
+
+        'dates' =>
+            $dates,
+
+        'assessors' =>
+            $assessors
     ];
 }
 
@@ -1129,6 +1310,7 @@ foreach ($skills as $skill) {
 ========================================================= */
 
 $training_data = [];
+
 
 $stmt_training = $conn->prepare("
     SELECT
@@ -1148,6 +1330,7 @@ $stmt_training = $conn->prepare("
         t.id DESC
 ");
 
+
 if ($stmt_training) {
 
     $stmt_training->bind_param(
@@ -1160,40 +1343,44 @@ if ($stmt_training) {
     $training_result =
         $stmt_training->get_result();
 
+
     while (
         $row =
             $training_result->fetch_assoc()
     ) {
 
-        $training_data[] = $row;
+        $training_data[] =
+            $row;
     }
+
 
     $stmt_training->close();
 }
 
 
 /* =========================================================
-   DETEKSI KOLOM HASIL TRAINING
+   DETEKSI KOLOM NILAI TRAINING
 ========================================================= */
 
 $training_result_column = null;
+
 $training_columns = [];
+
 
 $columns_result = $conn->query("
     SHOW COLUMNS FROM training_peserta
 ");
 
+
 if ($columns_result) {
 
-    while (
-        $column =
-            $columns_result->fetch_assoc()
-    ) {
+    while ($column = $columns_result->fetch_assoc()) {
 
         $training_columns[] =
             $column['Field'];
     }
 }
+
 
 $candidate_columns = [
     'nilai',
@@ -1202,6 +1389,7 @@ $candidate_columns = [
     'score',
     'hasil_training'
 ];
+
 
 foreach ($candidate_columns as $candidate) {
 
@@ -1222,10 +1410,11 @@ foreach ($candidate_columns as $candidate) {
 
 ?>
 
+
 <style>
 
 /* =========================================================
-   DETAIL PAGE
+   DETAIL PEKERJA
 ========================================================= */
 
 .detail-page .cardx {
@@ -1351,7 +1540,22 @@ foreach ($candidate_columns as $candidate) {
 }
 
 
-/* DETAIL */
+/* HAPUS */
+
+.btn-skill-delete {
+    background: #fff1f2;
+    border: 1px solid #fecdd3;
+    color: #dc3545;
+}
+
+.btn-skill-delete:hover {
+    background: #ffe4e6;
+    border-color: #fda4af;
+    color: #b42318;
+}
+
+
+/* DETAIL GRAFIK */
 
 .btn-skill-detail {
     background: #f3f5f8;
@@ -1365,7 +1569,7 @@ foreach ($candidate_columns as $candidate) {
 }
 
 
-/* ADD */
+/* TAMBAH */
 
 .btn-skill-add {
     background: #fff;
@@ -1376,21 +1580,6 @@ foreach ($candidate_columns as $candidate) {
 .btn-skill-add:hover {
     background: #eef5ff;
     border-color: #123f7a;
-}
-
-
-/* DELETE */
-
-.btn-skill-delete {
-    background: #fff1f2;
-    border: 1px solid #fecdd3;
-    color: #dc3545;
-}
-
-.btn-skill-delete:hover {
-    background: #ffe4e6;
-    border-color: #fda4af;
-    color: #b42318;
 }
 
 
@@ -1429,26 +1618,144 @@ foreach ($candidate_columns as $candidate) {
 
 
 /* =========================================================
-   CHART
+   DETAIL GRAFIK SKILL
 ========================================================= */
 
 .chart-detail-box {
-    height: 330px;
+    height: 300px;
     position: relative;
+    padding: 4px 2px 0;
 }
 
 .chart-info {
-    background: #f7f9fc;
-    border: 1px solid #e7ebf1;
-    border-radius: 10px;
-    padding: 10px 12px;
+    background: linear-gradient(135deg, #f7faff, #eef5ff);
+    border: 1px solid #dbe7f8;
+    border-radius: 12px;
+    padding: 12px 14px;
     font-size: 12px;
 }
 
+.chart-info .skill-name-detail {
+    color: #123f7a;
+    font-weight: 750;
+}
 
-/* =========================================================
-   TRAINING
-========================================================= */
+.chart-target-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 30px;
+    padding: 4px 8px;
+    border-radius: 7px;
+    background: #ffecee;
+    color: #dc3545;
+    font-weight: 750;
+}
+
+.detail-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.detail-stat-card {
+    border: 1px solid #e7ebf1;
+    border-radius: 12px;
+    padding: 12px;
+    min-height: 92px;
+}
+
+.detail-stat-card.latest {
+    background: #eef6ff;
+}
+
+.detail-stat-card.target {
+    background: #fff1f3;
+}
+
+.detail-stat-card.development {
+    background: #edf9f3;
+}
+
+.detail-stat-card.count {
+    background: #f4f0ff;
+}
+
+.detail-stat-card.average {
+    background: #fff8e9;
+}
+
+.detail-stat-label {
+    color: #788396;
+    font-size: 10px;
+    font-weight: 650;
+    margin-bottom: 5px;
+}
+
+.detail-stat-value {
+    color: #172033;
+    font-size: 21px;
+    line-height: 1.1;
+    font-weight: 800;
+}
+
+.detail-stat-card.development .detail-stat-value {
+    color: #198754;
+}
+
+.detail-stat-meta {
+    margin-top: 7px;
+    color: #788396;
+    font-size: 10px;
+    line-height: 1.35;
+}
+
+.detail-stat-meta i {
+    margin-right: 4px;
+}
+
+.detail-chart-legend {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin: 2px 0 8px;
+    font-size: 11px;
+    color: #667184;
+}
+
+.legend-line {
+    width: 30px;
+    height: 3px;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 5px;
+    border-radius: 3px;
+    background: #2f9be8;
+}
+
+.legend-target {
+    height: 0;
+    border-top: 2px dashed #ff7d98;
+    background: transparent;
+}
+
+.detail-development-note {
+    margin-top: 10px;
+    padding: 9px 12px;
+    border-radius: 9px;
+    background: #f7f9fc;
+    border: 1px solid #edf0f4;
+    color: #667184;
+    font-size: 10px;
+    text-align: center;
+}
+
+.detail-development-note strong {
+    color: #123f7a;
+}
 
 .training-result {
     font-weight: 600;
@@ -1456,22 +1763,506 @@ foreach ($candidate_columns as $candidate) {
 }
 
 
+
 /* =========================================================
-   DELETE CONFIRMATION
+   DETAIL PAGE - VISUAL REFRESH
 ========================================================= */
 
-.delete-warning {
-    background: #fff7ed;
-    border: 1px solid #fed7aa;
+.detail-page {
+    color: #172033;
+}
+
+.detail-topbar {
+    min-height: 106px;
+    padding: 22px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    background: #fff;
+    border: 1px solid #edf0f5;
+    border-radius: 18px;
+    box-shadow: 0 8px 26px rgba(25, 45, 75, .06);
+}
+
+.detail-topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    min-width: 0;
+}
+
+.detail-back-btn {
+    width: 50px;
+    height: 50px;
+    flex: 0 0 50px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    border: 1px solid #e4e9f1;
+    background: #f8fafc;
+    color: #667085;
+    text-decoration: none;
+    font-size: 20px;
+    transition: .2s ease;
+}
+
+.detail-back-btn:hover {
+    background: #eef5ff;
+    border-color: #cfe0f7;
+    color: #123f7a;
+    transform: translateX(-1px);
+}
+
+.detail-page-title {
+    margin: 0;
+    color: #10213d;
+    font-size: 25px;
+    line-height: 1.15;
+    font-weight: 800;
+    letter-spacing: -.4px;
+}
+
+.detail-page-subtitle {
+    margin-top: 6px;
+    color: #7a879c;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.detail-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.detail-btn {
+    min-height: 44px;
+    padding: 0 17px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
     border-radius: 10px;
-    padding: 12px 14px;
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 700;
+    border: 1px solid transparent;
+    transition: .2s ease;
+    white-space: nowrap;
+}
+
+.detail-btn i {
+    font-size: 16px;
+}
+
+.detail-btn-danger {
+    background: #e62f45;
+    color: #fff;
+    box-shadow: 0 5px 12px rgba(230, 47, 69, .12);
+}
+
+.detail-btn-danger:hover {
+    background: #cf2539;
+    color: #fff;
+    transform: translateY(-1px);
+}
+
+.detail-btn-warning {
+    background: #f9b800;
+    color: #111827;
+    box-shadow: 0 5px 12px rgba(249, 184, 0, .12);
+}
+
+.detail-btn-warning:hover {
+    background: #e6a900;
+    color: #111827;
+    transform: translateY(-1px);
+}
+
+/* PROFILE */
+
+.profile-card {
+    padding: 27px 25px 24px;
+    background: #fff;
+    border: 1px solid #edf0f5;
+    border-radius: 18px;
+    box-shadow: 0 8px 26px rgba(25, 45, 75, .05);
+}
+
+.profile-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+}
+
+.profile-left {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    min-width: 0;
+}
+
+.profile-avatar {
+    width: 94px;
+    height: 94px;
+    border-radius: 14px;
+    background: #0d57bd;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 94px;
+    font-size: 43px;
+    font-weight: 700;
+    box-shadow: inset 0 -8px 20px rgba(0, 0, 0, .08);
+}
+
+.profile-label {
+    color: #8190a6;
+    font-size: 13px;
+    line-height: 1.2;
+    font-weight: 700;
+    letter-spacing: .1px;
+    text-transform: uppercase;
+}
+
+.profile-name {
+    margin: 10px 0 7px;
+    color: #10213d;
+    font-size: 29px;
+    line-height: 1.1;
+    font-weight: 800;
+    letter-spacing: -.6px;
+}
+
+.profile-department {
+    color: #66758e;
+    font-size: 15px;
+    font-weight: 500;
+}
+
+.profile-status {
+    text-align: right;
+    min-width: 155px;
+}
+
+.profile-status .badge-status {
+    margin-top: 14px;
+    padding: 8px 15px;
+    border-radius: 999px;
     font-size: 13px;
 }
 
-.delete-warning i {
-    color: #ea580c;
+.profile-divider {
+    height: 1px;
+    margin: 27px 0 25px;
+    background: #e7ebf1;
 }
 
+.profile-info-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 30px;
+}
+
+.profile-info-label {
+    margin-bottom: 9px;
+    color: #8190a6;
+    font-size: 13px;
+}
+
+.profile-info-value {
+    color: #172033;
+    font-size: 14px;
+    font-weight: 750;
+}
+
+.profile-info-item .badge-status {
+    padding: 5px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+}
+
+/* STAT CARDS */
+
+.detail-stat-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 15px;
+}
+
+.detail-stat-item {
+    min-height: 128px;
+    padding: 22px 20px;
+    display: flex;
+    align-items: center;
+    gap: 17px;
+    border: 1px solid #edf0f5;
+    border-radius: 17px;
+    background: #fff;
+    box-shadow: 0 8px 24px rgba(25, 45, 75, .05);
+}
+
+.detail-stat-icon {
+    width: 58px;
+    height: 58px;
+    flex: 0 0 58px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 25px;
+}
+
+.icon-blue {
+    background: #eaf2ff;
+    color: #0d67d7;
+}
+
+.icon-green {
+    background: #e4f8ec;
+    color: #16864d;
+}
+
+.icon-orange {
+    background: #fff5dd;
+    color: #f0a500;
+}
+
+.icon-red {
+    background: #ffe8ec;
+    color: #e33b50;
+}
+
+.detail-stat-content {
+    min-width: 0;
+}
+
+.detail-stat-title {
+    color: #78869b;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+.detail-stat-number {
+    color: #172033;
+    font-size: 27px;
+    line-height: 1.05;
+    font-weight: 800;
+}
+
+.detail-stat-number span {
+    color: #68758b;
+    font-size: 17px;
+    font-weight: 600;
+}
+
+.number-green {
+    color: #16864d;
+}
+
+.number-orange {
+    color: #f0a500;
+}
+
+.number-red {
+    color: #e33b50;
+}
+
+.detail-stat-description {
+    margin-top: 7px;
+    color: #78869b;
+    font-size: 12px;
+}
+
+/* MAPPING */
+
+.detail-page .cardx {
+    border-radius: 18px;
+    border: 1px solid #edf0f5;
+    box-shadow: 0 8px 26px rgba(25, 45, 75, .05);
+}
+
+.detail-page .card-title {
+    color: #10213d;
+    font-size: 18px;
+    font-weight: 800;
+}
+
+.detail-page .section-note {
+    color: #8190a6;
+    font-size: 13px;
+}
+
+.detail-page .table {
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+.detail-page .table thead th {
+    padding: 13px 15px;
+    background: #fbfcfe;
+    color: #7b8799;
+    border-top: 1px solid #edf0f5;
+    border-bottom: 1px solid #edf0f5;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.detail-page .table thead th:first-child {
+    border-left: 1px solid #edf0f5;
+    border-top-left-radius: 10px;
+}
+
+.detail-page .table thead th:last-child {
+    border-right: 1px solid #edf0f5;
+    border-top-right-radius: 10px;
+}
+
+.detail-page .table tbody td {
+    padding: 15px;
+    color: #24324a;
+    border-bottom: 1px solid #edf0f5;
+    font-size: 13px;
+    background: #fff;
+}
+
+.detail-page .table tbody tr:last-child td:first-child {
+    border-bottom-left-radius: 10px;
+}
+
+.detail-page .table tbody tr:last-child td:last-child {
+    border-bottom-right-radius: 10px;
+}
+
+.detail-page .table-hover tbody tr:hover td {
+    background: #fbfdff;
+}
+
+.mapping-value {
+    color: #172033;
+    font-size: 15px;
+    font-weight: 800;
+}
+
+.skill-mapping-more {
+    padding-top: 14px;
+}
+
+.btn-skill-more {
+    border: 0;
+    background: transparent;
+    color: #0969da;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 5px 10px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.btn-skill-more:hover {
+    color: #064da2;
+}
+
+.btn-skill-more i {
+    font-size: 15px;
+    transition: transform .2s ease;
+}
+
+.btn-skill-more.expanded i {
+    transform: rotate(180deg);
+}
+
+/* STATUS */
+
+.detail-page .status-neutral,
+.detail-page .status-good,
+.detail-page .status-warning,
+.detail-page .status-bad {
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+/* =========================================================
+   RESPONSIVE DETAIL
+========================================================= */
+
+@media (max-width: 1100px) {
+    .detail-stat-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 768px) {
+    .detail-topbar {
+        padding: 18px;
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .detail-topbar-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .detail-btn {
+        flex: 1 1 auto;
+    }
+
+    .profile-main {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .profile-status {
+        text-align: left;
+        min-width: 0;
+    }
+
+    .profile-status .badge-status {
+        margin-top: 8px;
+    }
+
+    .profile-info-grid {
+        grid-template-columns: 1fr;
+        gap: 18px;
+    }
+
+    .profile-left {
+        gap: 18px;
+    }
+
+    .profile-avatar {
+        width: 76px;
+        height: 76px;
+        flex-basis: 76px;
+        font-size: 34px;
+    }
+
+    .profile-name {
+        font-size: 24px;
+    }
+
+    .detail-stat-row {
+        grid-template-columns: 1fr;
+    }
+
+    .detail-stat-item {
+        min-height: 108px;
+    }
+}
 
 /* =========================================================
    MOBILE
@@ -1491,7 +2282,15 @@ foreach ($candidate_columns as $candidate) {
     }
 
     .chart-detail-box {
-        height: 270px;
+        height: 250px;
+    }
+
+    .detail-stat-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .detail-stat-card:last-child {
+        grid-column: 1 / -1;
     }
 }
 
@@ -1501,40 +2300,44 @@ foreach ($candidate_columns as $candidate) {
 <div class="detail-page">
 
 
+<!-- =======================================================
+     ALERT
+======================================================= -->
+
 <?php if ($success_message !== ''): ?>
 
-<div class="alert alert-success alert-dismissible fade show">
+    <div class="alert alert-success alert-dismissible fade show">
 
-    <i class="bi bi-check-circle me-2"></i>
+        <i class="bi bi-check-circle me-2"></i>
 
-    <?= e($success_message) ?>
+        <?= e($success_message) ?>
 
-    <button
-        type="button"
-        class="btn-close"
-        data-bs-dismiss="alert"
-    ></button>
+        <button
+            type="button"
+            class="btn-close"
+            data-bs-dismiss="alert"
+        ></button>
 
-</div>
+    </div>
 
 <?php endif; ?>
 
 
 <?php if ($error_message !== ''): ?>
 
-<div class="alert alert-danger alert-dismissible fade show">
+    <div class="alert alert-danger alert-dismissible fade show">
 
-    <i class="bi bi-exclamation-triangle me-2"></i>
+        <i class="bi bi-exclamation-triangle me-2"></i>
 
-    <?= e($error_message) ?>
+        <?= e($error_message) ?>
 
-    <button
-        type="button"
-        class="btn-close"
-        data-bs-dismiss="alert"
-    ></button>
+        <button
+            type="button"
+            class="btn-close"
+            data-bs-dismiss="alert"
+        ></button>
 
-</div>
+    </div>
 
 <?php endif; ?>
 
@@ -1543,47 +2346,39 @@ foreach ($candidate_columns as $candidate) {
      TOP
 ======================================================= -->
 
-<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
+<div class="detail-topbar cardx mb-4">
 
-    <div>
+    <div class="detail-topbar-left">
 
-        <a
-            href="index.php"
-            class="btn btn-light border btn-sm text-muted"
-        >
-            <i class="bi bi-arrow-left me-1"></i>
-            Kembali ke Data Pekerja
+        <a href="index.php" class="detail-back-btn" title="Kembali">
+            <i class="bi bi-arrow-left"></i>
         </a>
+
+        <div>
+            <h1 class="detail-page-title">Detail Pekerja</h1>
+            <div class="detail-page-subtitle">
+                Informasi detail pekerja, kompetensi, dan riwayat penilaian
+            </div>
+        </div>
 
     </div>
 
-
-    <div class="d-flex gap-2 flex-wrap">
-
-        <a
-            href="index.php"
-            class="btn btn-light border btn-sm"
-        >
-            <i class="bi bi-people me-1"></i>
-            Data Pekerja
-        </a>
-
+    <div class="detail-topbar-actions">
 
         <a
             href="download_pdf.php?id=<?= (int) $id ?>"
-            class="btn btn-danger btn-sm"
+            class="detail-btn detail-btn-danger"
         >
-            <i class="bi bi-file-earmark-pdf me-1"></i>
-            PDF
+            <i class="bi bi-file-earmark-pdf"></i>
+            <span>Download PDF</span>
         </a>
-
 
         <a
             href="../penilaian/index.php?pekerja=<?= (int) $id ?>"
-            class="btn btn-primary btn-sm"
+            class="detail-btn detail-btn-warning"
         >
-            <i class="bi bi-pencil-square me-1"></i>
-            Update Penilaian
+            <i class="bi bi-pencil-square"></i>
+            <span>Update Penilaian</span>
         </a>
 
     </div>
@@ -1595,14 +2390,13 @@ foreach ($candidate_columns as $candidate) {
      PROFILE
 ======================================================= -->
 
-<div class="cardx mb-4">
+<div class="cardx profile-card mb-4">
 
-    <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+    <div class="profile-main">
 
-        <div class="d-flex align-items-center gap-3">
+        <div class="profile-left">
 
             <div class="profile-avatar">
-
                 <?= e(
                     strtoupper(
                         substr(
@@ -1612,39 +2406,30 @@ foreach ($candidate_columns as $candidate) {
                         )
                     )
                 ) ?>
-
             </div>
 
+            <div class="profile-identity">
 
-            <div>
+                <div class="profile-label">PROFIL PEKERJA</div>
 
-                <div class="small text-muted mb-1">
-                    PROFIL PEKERJA
-                </div>
-
-                <h3 class="fw-bold mb-1">
+                <h2 class="profile-name">
                     <?= e($pekerja['nama'] ?? '-') ?>
-                </h3>
+                </h2>
 
-                <div class="text-muted">
-
+                <div class="profile-department">
                     <?= e(
                         $pekerja['departemen']
                         ?: 'Departemen belum ditentukan'
                     ) ?>
-
                 </div>
 
             </div>
 
         </div>
 
+        <div class="profile-status">
 
-        <div class="text-end">
-
-            <div class="small text-muted mb-2">
-                STATUS KOMPETENSI
-            </div>
+            <div class="profile-label">STATUS KOMPETENSI</div>
 
             <span class="badge-status <?= e($overall_class) ?>">
                 <?= e($overall_status) ?>
@@ -1654,58 +2439,33 @@ foreach ($candidate_columns as $candidate) {
 
     </div>
 
+    <div class="profile-divider"></div>
 
-    <hr class="my-4">
+    <div class="profile-info-grid">
 
-
-    <div class="row g-3">
-
-        <div class="col-md-4">
-
-            <div class="small text-muted">
-                No. Reg / ID
+        <div class="profile-info-item">
+            <div class="profile-info-label">No. Reg / ID</div>
+            <div class="profile-info-value">
+                <?= (int) $pekerja['id'] ?>
             </div>
-
-            <div class="fw-semibold">
-                <?= e($pekerja['no_reg'] ?? '-') ?>
-            </div>
-
         </div>
 
-
-        <div class="col-md-4">
-
-            <div class="small text-muted">
-                Departemen
+        <div class="profile-info-item">
+            <div class="profile-info-label">Departemen</div>
+            <div class="profile-info-value">
+                <?= e($pekerja['departemen'] ?: '-') ?>
             </div>
-
-            <div class="fw-semibold">
-                <?= e($pekerja['departemen'] ?? '-') ?>
-            </div>
-
         </div>
 
-
-        <div class="col-md-4">
-
-            <div class="small text-muted">
-                Status Pekerja
+        <div class="profile-info-item">
+            <div class="profile-info-label">Status Pekerja</div>
+            <div>
+                <?php if (($pekerja['status'] ?? '') === 'Aktif'): ?>
+                    <span class="badge-status status-good">Aktif</span>
+                <?php else: ?>
+                    <span class="badge-status status-bad">Nonaktif</span>
+                <?php endif; ?>
             </div>
-
-            <?php if (($pekerja['status'] ?? '') === 'Aktif'): ?>
-
-                <span class="badge bg-success-subtle text-success">
-                    Aktif
-                </span>
-
-            <?php else: ?>
-
-                <span class="badge bg-secondary-subtle text-secondary">
-                    <?= e($pekerja['status'] ?? '-') ?>
-                </span>
-
-            <?php endif; ?>
-
         </div>
 
     </div>
@@ -1717,96 +2477,67 @@ foreach ($candidate_columns as $candidate) {
      STATISTIK
 ======================================================= -->
 
-<div class="row g-3 mb-4">
+<div class="detail-stat-row mb-4">
 
-
-    <div class="col-xl-3 col-md-6">
-
-        <div class="cardx simple-stat h-100">
-
-            <div class="small text-muted">
-                Rata-rata Skill
-            </div>
-
-            <div class="number mt-1">
-
+    <div class="cardx detail-stat-item">
+        <div class="detail-stat-icon icon-blue">
+            <i class="bi bi-graph-up-arrow"></i>
+        </div>
+        <div class="detail-stat-content">
+            <div class="detail-stat-title">Rata-rata Skill</div>
+            <div class="detail-stat-number">
                 <?= number_format($rata_rata, 2) ?>
-
-                <small class="text-muted fs-6">
-                    / 5
-                </small>
-
+                <span>/ 5</span>
             </div>
-
-            <div class="small text-muted">
+            <div class="detail-stat-description">
                 Target <?= number_format($rata_target, 2) ?>
             </div>
-
         </div>
-
     </div>
 
-
-    <div class="col-xl-3 col-md-6">
-
-        <div class="cardx simple-stat h-100">
-
-            <div class="small text-muted">
-                Skill Kompeten
-            </div>
-
-            <div class="number text-success mt-1">
+    <div class="cardx detail-stat-item">
+        <div class="detail-stat-icon icon-green">
+            <i class="bi bi-check-circle-fill"></i>
+        </div>
+        <div class="detail-stat-content">
+            <div class="detail-stat-title">Skill Kompeten</div>
+            <div class="detail-stat-number number-green">
                 <?= number_format($total_kompeten) ?>
             </div>
-
-            <div class="small text-muted">
+            <div class="detail-stat-description">
                 memenuhi target
             </div>
-
         </div>
-
     </div>
 
-
-    <div class="col-xl-3 col-md-6">
-
-        <div class="cardx simple-stat h-100">
-
-            <div class="small text-muted">
-                Perlu Peningkatan
-            </div>
-
-            <div class="number text-warning mt-1">
+    <div class="cardx detail-stat-item">
+        <div class="detail-stat-icon icon-orange">
+            <i class="bi bi-graph-up-arrow"></i>
+        </div>
+        <div class="detail-stat-content">
+            <div class="detail-stat-title">Perlu Peningkatan</div>
+            <div class="detail-stat-number number-orange">
                 <?= number_format($total_peningkatan) ?>
             </div>
-
-            <div class="small text-muted">
+            <div class="detail-stat-description">
                 masih ada gap
             </div>
-
         </div>
-
     </div>
 
-
-    <div class="col-xl-3 col-md-6">
-
-        <div class="cardx simple-stat h-100">
-
-            <div class="small text-muted">
-                Perlu Training
-            </div>
-
-            <div class="number text-danger mt-1">
+    <div class="cardx detail-stat-item">
+        <div class="detail-stat-icon icon-red">
+            <i class="bi bi-mortarboard-fill"></i>
+        </div>
+        <div class="detail-stat-content">
+            <div class="detail-stat-title">Perlu Training</div>
+            <div class="detail-stat-number number-red">
                 <?= number_format($total_training) ?>
             </div>
-
-            <div class="small text-muted">
+            <div class="detail-stat-description">
                 gap tinggi
             </div>
-
         </div>
-
     </div>
 
 </div>
@@ -1891,116 +2622,131 @@ foreach ($candidate_columns as $candidate) {
 
                 <?php foreach ($skill_mapping as $item): ?>
 
-                <tr>
+                    <tr class="<?= $no > 5 ? 'skill-extra-row d-none' : '' ?>">
 
-                    <td>
-                        <?= $no++ ?>
-                    </td>
-
-
-                    <td>
-
-                        <div class="fw-semibold">
-                            <?= e($item['nama_skill']) ?>
-                        </div>
+                        <td>
+                            <?= $no++ ?>
+                        </td>
 
 
-                        <?php if ($item['latest']): ?>
+                        <td>
 
-                        <div class="small text-muted">
+                            <div class="fw-semibold">
 
-                            <?= e($item['latest']['tahun']) ?>
+                                <?= e(
+                                    $item['nama_skill']
+                                ) ?>
 
-                            ·
+                            </div>
 
-                            <?= !empty(
-                                $item['latest']['tanggal_penilaian']
-                            )
-                                ? e(
-                                    date(
-                                        'd-m-Y',
-                                        strtotime(
-                                            $item['latest']['tanggal_penilaian']
-                                        )
+
+                            <?php if ($item['latest']): ?>
+
+                                <div class="small text-muted">
+
+                                    <?= e(
+                                        $item['latest']['tahun']
+                                    ) ?>
+
+                                    ·
+
+                                    <?= !empty(
+                                        $item['latest']['tanggal_penilaian']
                                     )
-                                )
-                                : '-' ?>
+                                        ? e(
+                                            date(
+                                                'd-m-Y',
+                                                strtotime(
+                                                    $item['latest']['tanggal_penilaian']
+                                                )
+                                            )
+                                        )
+                                        : '-'
+                                    ?>
 
-                        </div>
+                                </div>
 
-                        <?php endif; ?>
+                            <?php endif; ?>
 
-                    </td>
-
-
-                    <td class="text-center">
-
-                        <?php if ($item['latest']): ?>
-
-                        <span class="mapping-value">
-
-                            <?= number_format(
-                                (float) $item['actual'],
-                                0
-                            ) ?>
-
-                        </span>
-
-                        <?php else: ?>
-
-                        <span class="text-muted">
-                            -
-                        </span>
-
-                        <?php endif; ?>
-
-                    </td>
+                        </td>
 
 
-                    <td class="text-center fw-semibold">
-                        3
-                    </td>
+                        <td class="text-center">
+
+                            <?php if ($item['latest']): ?>
+
+                                <span class="mapping-value">
+
+                                    <?= number_format(
+                                        (float) $item['actual'],
+                                        0
+                                    ) ?>
+
+                                </span>
+
+                            <?php else: ?>
+
+                                <span class="text-muted">
+                                    -
+                                </span>
+
+                            <?php endif; ?>
+
+                        </td>
 
 
-                    <td class="text-center">
+                        <td class="text-center fw-semibold">
+                            3
+                        </td>
 
-                        <?php if ($item['gap'] === null): ?>
 
-                            <span class="text-muted">
-                                -
-                            </span>
+                        <td class="text-center">
 
-                        <?php elseif ($item['gap'] > 0): ?>
+                            <?php if ($item['gap'] === null): ?>
 
-                            <span class="fw-bold text-danger">
+                                <span class="text-muted">
+                                    -
+                                </span>
 
-                                <?= number_format(
-                                    $item['gap'],
+                            <?php elseif ($item['gap'] > 0): ?>
+
+                                <span class="fw-bold text-danger">
+
+                                    <?= number_format(
+                                        $item['gap'],
+                                        0
+                                    ) ?>
+
+                                </span>
+
+                            <?php else: ?>
+
+                                <span class="fw-bold text-success">
                                     0
+                                </span>
+
+                            <?php endif; ?>
+
+                        </td>
+
+
+                        <td>
+
+                            <span
+                                class="badge-status <?= e(
+                                    $item['status_class']
+                                ) ?>"
+                            >
+
+                                <?= e(
+                                    $item['status']
                                 ) ?>
 
                             </span>
 
-                        <?php else: ?>
+                        </td>
 
-                            <span class="fw-bold text-success">
-                                0
-                            </span>
-
-                        <?php endif; ?>
-
-                    </td>
-
-
-                    <td>
-
-                        <span class="badge-status <?= e($item['status_class']) ?>">
-                            <?= e($item['status']) ?>
-                        </span>
-
-                    </td>
-
-                </tr>
+                    </tr>
 
                 <?php endforeach; ?>
 
@@ -2012,7 +2758,9 @@ foreach ($candidate_columns as $candidate) {
                         colspan="6"
                         class="text-center py-4 text-muted"
                     >
+
                         Belum ada skill aktif.
+
                     </td>
 
                 </tr>
@@ -2024,6 +2772,20 @@ foreach ($candidate_columns as $candidate) {
         </table>
 
     </div>
+
+    <?php if (count($skill_mapping) > 5): ?>
+        <div class="skill-mapping-more text-center">
+            <button
+                type="button"
+                class="btn-skill-more"
+                id="skillMappingMoreBtn"
+                onclick="toggleSkillMapping()"
+            >
+                <span id="skillMappingMoreText">Lihat semua skill</span>
+                <i class="bi bi-chevron-down" id="skillMappingMoreIcon"></i>
+            </button>
+        </div>
+    <?php endif; ?>
 
 </div>
 
@@ -2045,7 +2807,8 @@ foreach ($candidate_columns as $candidate) {
             <div class="section-note">
 
                 Setiap tahun otomatis menjadi kolom.
-                Edit atau hapus nilai assessment melalui tombol aksi.
+
+                Edit dan hapus hanya pada nilai terbaru setiap skill.
 
             </div>
 
@@ -2069,208 +2832,164 @@ foreach ($candidate_columns as $candidate) {
 
     <?php if (!empty($years)): ?>
 
-    <div class="table-responsive">
+        <div class="table-responsive">
 
-        <table class="table table-hover history-table">
+            <table class="table table-hover history-table">
 
-            <thead>
+                <thead>
 
-                <tr>
+                    <tr>
 
-                    <th>
-                        KOMPETENSI / SKILL
-                    </th>
-
-
-                    <?php foreach ($years as $tahun): ?>
-
-                    <th class="history-year">
-                        <?= e($tahun) ?>
-                    </th>
-
-                    <?php endforeach; ?>
+                        <th>
+                            KOMPETENSI / SKILL
+                        </th>
 
 
-                    <th
-                        class="text-center"
-                        width="145"
-                    >
-                        AKSI
-                    </th>
+                        <?php foreach ($years as $tahun): ?>
 
-                </tr>
+                            <th class="history-year">
 
-            </thead>
+                                <?= e($tahun) ?>
 
+                            </th>
 
-            <tbody>
-
-            <?php foreach ($skills as $skill): ?>
-
-                <?php
-
-                $skill_id =
-                    (int) $skill['id'];
-
-                $latest =
-                    $latest_skill[$skill_id]
-                    ?? null;
-
-                ?>
-
-                <tr>
+                        <?php endforeach; ?>
 
 
-                    <!-- SKILL -->
+                        <th
+                            class="text-center"
+                            width="150"
+                        >
 
-                    <td>
+                            AKSI
 
-                        <div class="fw-semibold">
-                            <?= e($skill['nama_skill']) ?>
-                        </div>
+                        </th>
 
-                    </td>
+                    </tr>
 
-
-                    <!-- NILAI PER TAHUN -->
-
-                    <?php foreach ($years as $tahun): ?>
-
-                        <?php
-
-                        $history =
-                            $history_matrix[$skill_id][$tahun]
-                            ?? null;
-
-                        ?>
-
-                        <td class="text-center">
-
-                            <?php if ($history): ?>
-
-                                <div class="history-score">
-
-                                    <?= number_format(
-                                        (float) $history['nilai'],
-                                        0
-                                    ) ?>
-
-                                </div>
+                </thead>
 
 
-                                <?php if (
-                                    !empty(
-                                        $history['tanggal_penilaian']
-                                    )
-                                ): ?>
+                <tbody>
 
-                                <span class="history-date">
 
-                                    <i class="bi bi-calendar3 me-1"></i>
+                <?php foreach ($skills as $skill): ?>
 
-                                    <?= e(
-                                        date(
-                                            'd-m-Y',
-                                            strtotime(
-                                                $history['tanggal_penilaian']
-                                            )
-                                        )
-                                    ) ?>
+                    <?php
 
-                                </span>
+                    $skill_id =
+                        (int) $skill['id'];
 
-                                <?php endif; ?>
+                    $latest =
+                        $latest_skill[$skill_id]
+                        ?? null;
 
-                            <?php else: ?>
+                    ?>
 
-                                <span class="text-muted">
-                                    -
-                                </span>
 
-                            <?php endif; ?>
+                    <tr id="skill-row-<?= $skill_id ?>">
+
+
+                        <!-- SKILL -->
+
+                        <td>
+
+                            <div class="fw-semibold">
+
+                                <?= e(
+                                    $skill['nama_skill']
+                                ) ?>
+
+                            </div>
 
                         </td>
 
-                    <?php endforeach; ?>
+
+                        <!-- TAHUN -->
+
+                        <?php foreach ($years as $tahun): ?>
+
+                            <?php
+
+                            $history =
+                                $history_matrix[
+                                    $skill_id
+                                ][$tahun]
+                                ?? null;
+
+                            ?>
 
 
-                    <!-- AKSI -->
-
-                    <td>
-
-                        <div class="skill-actions">
+                            <td class="text-center">
 
 
-                            <?php if ($latest): ?>
+                                <?php if ($history): ?>
 
+                                    <div class="history-score">
 
-                                <!-- EDIT NILAI TERBARU -->
-
-                                <button
-                                    type="button"
-                                    class="btn-skill-action btn-skill-edit"
-                                    title="Edit nilai terbaru"
-                                    onclick="openEditSkill(
-                                        <?= (int) $latest['id'] ?>,
-                                        <?= (int) $latest['tahun'] ?>,
-                                        <?= htmlspecialchars(
-                                            json_encode(
-                                                (float) $latest['nilai']
-                                            ),
-                                            ENT_QUOTES,
-                                            'UTF-8'
-                                        ) ?>,
-                                        <?= htmlspecialchars(
-                                            json_encode(
-                                                $latest['tanggal_penilaian']
-                                                ?? ''
-                                            ),
-                                            ENT_QUOTES,
-                                            'UTF-8'
-                                        ) ?>,
-                                        <?= htmlspecialchars(
-                                            json_encode(
-                                                $latest['assessor']
-                                                ?? ''
-                                            ),
-                                            ENT_QUOTES,
-                                            'UTF-8'
-                                        ) ?>,
-                                        <?= htmlspecialchars(
-                                            json_encode(
-                                                $latest['catatan']
-                                                ?? ''
-                                            ),
-                                            ENT_QUOTES,
-                                            'UTF-8'
-                                        ) ?>,
-                                        <?= htmlspecialchars(
-                                            json_encode(
-                                                $skill['nama_skill']
-                                            ),
-                                            ENT_QUOTES,
-                                            'UTF-8'
+                                        <?= number_format(
+                                            (float) $history['nilai'],
+                                            0
                                         ) ?>
-                                    )"
-                                >
 
-                                    <i class="bi bi-pencil"></i>
-
-                                </button>
+                                    </div>
 
 
-                            <?php else: ?>
+                                    <?php if (
+                                        !empty(
+                                            $history['tanggal_penilaian']
+                                        )
+                                    ): ?>
+
+                                        <span class="history-date">
+
+                                            <i class="bi bi-calendar3 me-1"></i>
+
+                                            <?= e(
+                                                date(
+                                                    'd-m-Y',
+                                                    strtotime(
+                                                        $history[
+                                                            'tanggal_penilaian'
+                                                        ]
+                                                    )
+                                                )
+                                            ) ?>
+
+                                        </span>
+
+                                    <?php endif; ?>
 
 
-                                <!-- TAMBAH NILAI -->
+                                <?php else: ?>
+
+                                    <span class="text-muted">
+                                        -
+                                    </span>
+
+                                <?php endif; ?>
+
+
+                            </td>
+
+                        <?php endforeach; ?>
+
+
+                        <!-- AKSI -->
+
+                        <td>
+
+                            <div class="skill-actions">
+
+
+                                <!-- GRAFIK: SELALU PALING KIRI -->
 
                                 <button
                                     type="button"
-                                    class="btn-skill-action btn-skill-add"
-                                    title="Tambah nilai"
-                                    onclick="openAddSkill(
+                                    class="btn-skill-action btn-skill-detail"
+                                    title="Lihat grafik penilaian"
+                                    onclick="openSkillDetail(
                                         <?= $skill_id ?>,
-                                        <?= (int) $tahun_baru ?>,
                                         <?= htmlspecialchars(
                                             json_encode(
                                                 $skill['nama_skill']
@@ -2281,97 +3000,169 @@ foreach ($candidate_columns as $candidate) {
                                     )"
                                 >
 
-                                    <i class="bi bi-plus"></i>
+                                    <i class="bi bi-graph-up"></i>
 
                                 </button>
 
 
-                            <?php endif; ?>
+                                <?php if ($latest): ?>
 
 
-                            <!-- DETAIL GRAFIK -->
+                                    <!-- EDIT -->
 
-                            <button
-                                type="button"
-                                class="btn-skill-action btn-skill-detail"
-                                title="Lihat grafik penilaian"
-                                onclick="openSkillDetail(
-                                    <?= $skill_id ?>,
-                                    <?= htmlspecialchars(
-                                        json_encode(
-                                            $skill['nama_skill']
-                                        ),
-                                        ENT_QUOTES,
-                                        'UTF-8'
-                                    ) ?>
-                                )"
-                            >
+                                    <button
+                                        type="button"
+                                        class="btn-skill-action btn-skill-edit"
+                                        title="Edit nilai terbaru"
+                                        onclick="openEditSkill(
+                                            <?= (int) $latest['id'] ?>,
+                                            <?= (int) $latest['tahun'] ?>,
+                                            <?= htmlspecialchars(
+                                                json_encode(
+                                                    (float) $latest['nilai']
+                                                ),
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            ) ?>,
+                                            <?= htmlspecialchars(
+                                                json_encode(
+                                                    $latest['tanggal_penilaian'] ?? ''
+                                                ),
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            ) ?>,
+                                            <?= htmlspecialchars(
+                                                json_encode(
+                                                    $latest['assessor'] ?? ''
+                                                ),
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            ) ?>,
+                                            <?= htmlspecialchars(
+                                                json_encode(
+                                                    $latest['catatan'] ?? ''
+                                                ),
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            ) ?>,
+                                            <?= htmlspecialchars(
+                                                json_encode(
+                                                    $skill['nama_skill']
+                                                ),
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            ) ?>
+                                        )"
+                                    >
 
-                                <i class="bi bi-graph-up"></i>
+                                        <i class="bi bi-pencil"></i>
 
-                            </button>
-
-
-                            <?php if (!empty($latest)): ?>
-
-                            <!-- HAPUS NILAI TERBARU -->
-
-                            <button
-                                type="button"
-                                class="btn-skill-action btn-skill-delete"
-                                title="Hapus nilai terbaru"
-                                onclick="openDeleteSkill(
-                                    <?= (int) $latest['id'] ?>,
-                                    <?= htmlspecialchars(
-                                        json_encode(
-                                            $skill['nama_skill']
-                                        ),
-                                        ENT_QUOTES,
-                                        'UTF-8'
-                                    ) ?>,
-                                    <?= (int) $latest['tahun'] ?>,
-                                    <?= htmlspecialchars(
-                                        json_encode(
-                                            (float) $latest['nilai']
-                                        ),
-                                        ENT_QUOTES,
-                                        'UTF-8'
-                                    ) ?>
-                                )"
-                            >
-
-                                <i class="bi bi-trash"></i>
-
-                            </button>
-
-                            <?php endif; ?>
+                                    </button>
 
 
-                        </div>
+                                    <!-- HAPUS -->
 
-                    </td>
+                                    <form
+                                        method="POST"
+                                        class="d-inline"
+                                        onsubmit="return confirmDeleteSkill(
+                                            <?= htmlspecialchars(
+                                                json_encode(
+                                                    $skill['nama_skill']
+                                                ),
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            ) ?>,
+                                            <?= (int) $latest['tahun'] ?>,
+                                            <?= (float) $latest['nilai'] ?>
+                                        );"
+                                    >
 
-                </tr>
+                                        <input
+                                            type="hidden"
+                                            name="action"
+                                            value="delete_skill"
+                                        >
 
-            <?php endforeach; ?>
+                                        <input
+                                            type="hidden"
+                                            name="id_penilaian"
+                                            value="<?= (int) $latest['id'] ?>"
+                                        >
 
-            </tbody>
+                                        <button
+                                            type="submit"
+                                            class="btn-skill-action btn-skill-delete"
+                                            title="Hapus nilai terbaru"
+                                        >
 
-        </table>
+                                            <i class="bi bi-trash"></i>
 
-    </div>
+                                        </button>
+
+                                    </form>
+
+
+                                <?php else: ?>
+
+
+                                    <!-- TAMBAH -->
+
+                                    <button
+                                        type="button"
+                                        class="btn-skill-action btn-skill-add"
+                                        title="Tambah nilai"
+                                        onclick="openAddSkill(
+                                            <?= $skill_id ?>,
+                                            <?= (int) $tahun_baru ?>,
+                                            <?= htmlspecialchars(
+                                                json_encode(
+                                                    $skill['nama_skill']
+                                                ),
+                                                ENT_QUOTES,
+                                                'UTF-8'
+                                            ) ?>
+                                        )"
+                                    >
+
+                                        <i class="bi bi-plus"></i>
+
+                                    </button>
+
+
+                                <?php endif; ?>
+
+
+
+
+                            </div>
+
+                        </td>
+
+
+                    </tr>
+
+
+                <?php endforeach; ?>
+
+
+                </tbody>
+
+            </table>
+
+        </div>
 
 
     <?php else: ?>
 
 
-    <div class="text-center py-5 text-muted">
+        <div class="text-center py-5 text-muted">
 
-        <i class="bi bi-table fs-2 d-block mb-2"></i>
+            <i class="bi bi-table fs-2 d-block mb-2"></i>
 
-        Belum ada riwayat penilaian.
+            Belum ada riwayat penilaian.
 
-    </div>
+        </div>
 
 
     <?php endif; ?>
@@ -2453,9 +3244,12 @@ foreach ($candidate_columns as $candidate) {
 
             <tbody>
 
+
             <?php if (!empty($training_data)): ?>
 
+
                 <?php foreach ($training_data as $training): ?>
+
 
                     <?php
 
@@ -2463,21 +3257,26 @@ foreach ($candidate_columns as $candidate) {
                         $training['status_training']
                         ?? '';
 
-                    if ($status_training === 'Selesai') {
+
+                    if (
+                        $status_training
+                        === 'Selesai'
+                    ) {
 
                         $training_class =
                             'status-good';
 
                     } elseif (
-                        $status_training === 'Dibatalkan'
+                        $status_training
+                        === 'Dibatalkan'
                     ) {
 
                         $training_class =
                             'status-bad';
 
                     } elseif (
-                        $status_training ===
-                        'Sedang Berlangsung'
+                        $status_training
+                        === 'Sedang Berlangsung'
                     ) {
 
                         $training_class =
@@ -2521,11 +3320,13 @@ foreach ($candidate_columns as $candidate) {
                             ? (
                                 $training[
                                     $training_result_column
-                                ] ?? ''
+                                ]
+                                ?? ''
                             )
                             : '';
 
                     ?>
+
 
                     <tr>
 
@@ -2547,7 +3348,10 @@ foreach ($candidate_columns as $candidate) {
 
                         <td>
 
-                            <?= e($tgl_mulai) ?>
+                            <?= e(
+                                $tgl_mulai
+                            ) ?>
+
 
                             <?php if (
                                 $tgl_selesai !== '-'
@@ -2557,7 +3361,9 @@ foreach ($candidate_columns as $candidate) {
                                     s/d
                                 </span>
 
-                                <?= e($tgl_selesai) ?>
+                                <?= e(
+                                    $tgl_selesai
+                                ) ?>
 
                             <?php endif; ?>
 
@@ -2586,9 +3392,11 @@ foreach ($candidate_columns as $candidate) {
 
                         <td>
 
+
                             <?php if (
                                 $training_result_column
                             ): ?>
+
 
                                 <div class="d-flex align-items-center gap-2">
 
@@ -2619,9 +3427,7 @@ foreach ($candidate_columns as $candidate) {
                                             ) ?>,
                                             <?= htmlspecialchars(
                                                 json_encode(
-                                                    $training[
-                                                        'nama_training'
-                                                    ]
+                                                    $training['nama_training']
                                                 ),
                                                 ENT_QUOTES,
                                                 'UTF-8'
@@ -2635,6 +3441,7 @@ foreach ($candidate_columns as $candidate) {
 
                                 </div>
 
+
                             <?php else: ?>
 
                                 <span class="text-muted">
@@ -2643,12 +3450,17 @@ foreach ($candidate_columns as $candidate) {
 
                             <?php endif; ?>
 
+
                         </td>
 
 
                         <td>
 
-                            <span class="badge-status <?= e($training_class) ?>">
+                            <span
+                                class="badge-status <?= e(
+                                    $training_class
+                                ) ?>"
+                            >
 
                                 <?= e(
                                     $status_training
@@ -2659,11 +3471,15 @@ foreach ($candidate_columns as $candidate) {
 
                         </td>
 
+
                     </tr>
+
 
                 <?php endforeach; ?>
 
+
             <?php else: ?>
+
 
                 <tr>
 
@@ -2680,7 +3496,9 @@ foreach ($candidate_columns as $candidate) {
 
                 </tr>
 
+
             <?php endif; ?>
+
 
             </tbody>
 
@@ -2711,11 +3529,13 @@ foreach ($candidate_columns as $candidate) {
 
             <form method="POST">
 
+
                 <input
                     type="hidden"
                     name="action"
                     value="add_skill"
                 >
+
 
                 <input
                     type="hidden"
@@ -2731,6 +3551,7 @@ foreach ($candidate_columns as $candidate) {
                         <h5 class="modal-title fw-bold mb-1">
                             Tambah Nilai
                         </h5>
+
 
                         <div
                             class="small text-muted"
@@ -2760,7 +3581,6 @@ foreach ($candidate_columns as $candidate) {
                             Skill
                         </label>
 
-
                         <input
                             type="text"
                             id="add_skill_search"
@@ -2771,24 +3591,21 @@ foreach ($candidate_columns as $candidate) {
                             required
                         >
 
-
                         <input
                             type="hidden"
                             name="id_skill"
                             id="add_id_skill"
+                            value=""
                         >
-
 
                         <datalist id="skillList">
 
                             <?php foreach ($skills as $skill): ?>
 
-                            <option
-                                value="<?= e(
-                                    $skill['nama_skill']
-                                ) ?>"
-                                data-id="<?= (int) $skill['id'] ?>"
-                            ></option>
+                                <option
+                                    value="<?= e($skill['nama_skill']) ?>"
+                                    data-id="<?= (int) $skill['id'] ?>"
+                                ></option>
 
                             <?php endforeach; ?>
 
@@ -2838,6 +3655,7 @@ foreach ($candidate_columns as $candidate) {
                             >
 
                         </div>
+
 
                     </div>
 
@@ -2889,6 +3707,7 @@ foreach ($candidate_columns as $candidate) {
 
                     </div>
 
+
                 </div>
 
 
@@ -2916,6 +3735,7 @@ foreach ($candidate_columns as $candidate) {
 
                 </div>
 
+
             </form>
 
         </div>
@@ -2926,7 +3746,7 @@ foreach ($candidate_columns as $candidate) {
 
 
 <!-- =======================================================
-     MODAL EDIT NILAI
+     MODAL EDIT NILAI TERBARU
 ======================================================= -->
 
 <div
@@ -2942,11 +3762,13 @@ foreach ($candidate_columns as $candidate) {
 
             <form method="POST">
 
+
                 <input
                     type="hidden"
                     name="action"
                     value="edit_skill"
                 >
+
 
                 <input
                     type="hidden"
@@ -2962,6 +3784,7 @@ foreach ($candidate_columns as $candidate) {
                         <h5 class="modal-title fw-bold mb-1">
                             Edit Nilai
                         </h5>
+
 
                         <div
                             class="small text-muted"
@@ -2999,7 +3822,10 @@ foreach ($candidate_columns as $candidate) {
                         >
 
                         <div class="small text-muted mt-1">
-                            Tahun tidak diubah karena ini merupakan nilai terbaru skill.
+
+                            Tahun tidak diubah karena ini merupakan
+                            nilai terbaru skill.
+
                         </div>
 
                     </div>
@@ -3072,6 +3898,7 @@ foreach ($candidate_columns as $candidate) {
 
                     </div>
 
+
                 </div>
 
 
@@ -3099,176 +3926,6 @@ foreach ($candidate_columns as $candidate) {
 
                 </div>
 
-            </form>
-
-        </div>
-
-    </div>
-
-</div>
-
-
-<!-- =======================================================
-     MODAL HAPUS NILAI
-======================================================= -->
-
-<div
-    class="modal fade"
-    id="modalDeleteSkill"
-    tabindex="-1"
-    aria-hidden="true"
->
-
-    <div class="modal-dialog modal-dialog-centered">
-
-        <div class="modal-content">
-
-            <form method="POST">
-
-                <input
-                    type="hidden"
-                    name="action"
-                    value="delete_skill"
-                >
-
-                <input
-                    type="hidden"
-                    name="id_penilaian"
-                    id="delete_id_penilaian"
-                >
-
-
-                <div class="modal-header">
-
-                    <div>
-
-                        <h5 class="modal-title fw-bold mb-1">
-                            Hapus Nilai Assessment
-                        </h5>
-
-                        <div class="small text-muted">
-                            Konfirmasi penghapusan data.
-                        </div>
-
-                    </div>
-
-
-                    <button
-                        type="button"
-                        class="btn-close"
-                        data-bs-dismiss="modal"
-                    ></button>
-
-                </div>
-
-
-                <div class="modal-body">
-
-                    <div class="delete-warning">
-
-                        <div class="d-flex gap-2">
-
-                            <div>
-
-                                <i class="bi bi-exclamation-triangle-fill fs-5"></i>
-
-                            </div>
-
-
-                            <div>
-
-                                <div class="fw-semibold mb-1">
-                                    Yakin ingin menghapus nilai ini?
-                                </div>
-
-                                <div class="text-muted">
-                                    Data assessment yang dihapus tidak dapat dikembalikan.
-                                </div>
-
-                            </div>
-
-                        </div>
-
-                    </div>
-
-
-                    <div class="mt-3">
-
-                        <div class="small text-muted">
-                            Skill
-                        </div>
-
-                        <div
-                            class="fw-semibold"
-                            id="delete_skill_name"
-                        >
-                            -
-                        </div>
-
-                    </div>
-
-
-                    <div class="row mt-2">
-
-                        <div class="col-6">
-
-                            <div class="small text-muted">
-                                Tahun
-                            </div>
-
-                            <div
-                                class="fw-semibold"
-                                id="delete_skill_year"
-                            >
-                                -
-                            </div>
-
-                        </div>
-
-
-                        <div class="col-6">
-
-                            <div class="small text-muted">
-                                Nilai
-                            </div>
-
-                            <div
-                                class="fw-semibold text-danger"
-                                id="delete_skill_value"
-                            >
-                                -
-                            </div>
-
-                        </div>
-
-                    </div>
-
-                </div>
-
-
-                <div class="modal-footer">
-
-                    <button
-                        type="button"
-                        class="btn btn-light border"
-                        data-bs-dismiss="modal"
-                    >
-                        Batal
-                    </button>
-
-
-                    <button
-                        type="submit"
-                        class="btn btn-danger"
-                    >
-
-                        <i class="bi bi-trash me-1"></i>
-
-                        Ya, Hapus Nilai
-
-                    </button>
-
-                </div>
 
             </form>
 
@@ -3306,6 +3963,7 @@ foreach ($candidate_columns as $candidate) {
                         Detail Penilaian
                     </h5>
 
+
                     <div class="small text-muted">
                         Perkembangan nilai dari tahun ke tahun.
                     </div>
@@ -3324,11 +3982,9 @@ foreach ($candidate_columns as $candidate) {
 
             <div class="modal-body">
 
-
                 <div class="chart-info mb-3">
 
-                    <div class="d-flex justify-content-between flex-wrap gap-2">
-
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
 
                         <div>
 
@@ -3336,26 +3992,183 @@ foreach ($candidate_columns as $candidate) {
                                 Skill:
                             </span>
 
-                            <strong id="detailSkillName">
+                            <strong
+                                id="detailSkillName"
+                                class="skill-name-detail"
+                            >
                                 -
                             </strong>
 
                         </div>
 
 
-                        <div>
+                        <div class="d-flex align-items-center gap-2">
 
                             <span class="text-muted">
                                 Target:
                             </span>
 
-                            <strong>
+                            <span
+                                id="detailSkillTarget"
+                                class="chart-target-badge"
+                            >
                                 3
-                            </strong>
+                            </span>
 
                         </div>
 
                     </div>
+
+                </div>
+
+
+                <div class="detail-stat-grid">
+
+
+                    <div class="detail-stat-card latest">
+
+                        <div class="detail-stat-label">
+                            Nilai Terbaru
+                        </div>
+
+                        <div
+                            class="detail-stat-value"
+                            id="detailLatestValue"
+                        >
+                            -
+                        </div>
+
+                        <div
+                            class="detail-stat-meta"
+                            id="detailLatestMeta"
+                        >
+
+                            <i class="bi bi-star"></i>
+
+                            <span>
+                                Tahun -
+                            </span>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="detail-stat-card target">
+
+                        <div class="detail-stat-label">
+                            Target
+                        </div>
+
+                        <div
+                            class="detail-stat-value"
+                            id="detailTargetValue"
+                        >
+                            3
+                        </div>
+
+                        <div class="detail-stat-meta">
+
+                            <i class="bi bi-bullseye"></i>
+
+                            Minimal nilai
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="detail-stat-card development">
+
+                        <div class="detail-stat-label">
+                            Perkembangan
+                        </div>
+
+                        <div
+                            class="detail-stat-value"
+                            id="detailDevelopmentValue"
+                        >
+                            -
+                        </div>
+
+                        <div
+                            class="detail-stat-meta"
+                            id="detailDevelopmentMeta"
+                        >
+
+                            <i class="bi bi-graph-up-arrow"></i>
+
+                            Belum ada perkembangan
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="detail-stat-card count">
+
+                        <div class="detail-stat-label">
+                            Jumlah Penilaian
+                        </div>
+
+                        <div
+                            class="detail-stat-value"
+                            id="detailCountValue"
+                        >
+                            0
+                        </div>
+
+                        <div class="detail-stat-meta">
+
+                            <i class="bi bi-calendar3"></i>
+
+                            <span>
+                                Riwayat tahun
+                            </span>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="detail-stat-card average">
+
+                        <div class="detail-stat-label">
+                            Rata-rata
+                        </div>
+
+                        <div
+                            class="detail-stat-value"
+                            id="detailAverageValue"
+                        >
+                            -
+                        </div>
+
+                        <div class="detail-stat-meta">
+
+                            <i class="bi bi-bar-chart"></i>
+
+                            Semua tahun
+
+                        </div>
+
+                    </div>
+
+
+                </div>
+
+
+                <div class="detail-chart-legend">
+
+                    <span>
+                        <span class="legend-line"></span>
+                        Nilai Aktual
+                    </span>
+
+                    <span>
+                        <span class="legend-line legend-target"></span>
+                        Target (Minimum)
+                    </span>
 
                 </div>
 
@@ -3368,10 +4181,20 @@ foreach ($candidate_columns as $candidate) {
 
 
                 <div
+                    id="detailDevelopmentNote"
+                    class="detail-development-note d-none"
+                ></div>
+
+
+                <div
                     id="detailSkillEmpty"
                     class="text-center text-muted py-4 d-none"
                 >
+
+                    <i class="bi bi-bar-chart fs-3 d-block mb-2"></i>
+
                     Belum ada riwayat penilaian untuk skill ini.
+
                 </div>
 
             </div>
@@ -3388,6 +4211,7 @@ foreach ($candidate_columns as $candidate) {
                 </button>
 
             </div>
+
 
         </div>
 
@@ -3415,11 +4239,13 @@ foreach ($candidate_columns as $candidate) {
 
             <form method="POST">
 
+
                 <input
                     type="hidden"
                     name="action"
                     value="edit_training"
                 >
+
 
                 <input
                     type="hidden"
@@ -3435,6 +4261,7 @@ foreach ($candidate_columns as $candidate) {
                         <h5 class="modal-title fw-bold mb-1">
                             Edit Hasil Training
                         </h5>
+
 
                         <div
                             class="small text-muted"
@@ -3457,9 +4284,11 @@ foreach ($candidate_columns as $candidate) {
 
                 <div class="modal-body">
 
+
                     <label class="form-label">
                         Hasil / Nilai Training
                     </label>
+
 
                     <input
                         type="text"
@@ -3469,9 +4298,14 @@ foreach ($candidate_columns as $candidate) {
                         placeholder="Contoh: 85 / Lulus / Kompeten"
                     >
 
+
                     <div class="small text-muted mt-2">
-                        Nilai akan diperbarui langsung pada data peserta training.
+
+                        Nilai akan diperbarui langsung pada
+                        data peserta training.
+
                     </div>
+
 
                 </div>
 
@@ -3500,6 +4334,7 @@ foreach ($candidate_columns as $candidate) {
 
                 </div>
 
+
             </form>
 
         </div>
@@ -3511,109 +4346,24 @@ foreach ($candidate_columns as $candidate) {
 <?php endif; ?>
 
 
+<!-- =======================================================
+     CHART.JS
+======================================================= -->
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 
 
 <script>
 
 /* =========================================================
-   PERTAHANKAN POSISI SCROLL SETELAH POST
-========================================================= */
-
-(function () {
-
-    const scrollStorageKey =
-        'detail_pekerja_scroll_y_<?= (int) $id ?>';
-
-    /*
-     * Browser diarahkan kembali ke detail.php setelah proses
-     * tambah, edit, atau hapus. Simpan posisi scroll sebelum
-     * form dikirim agar setelah redirect halaman kembali ke
-     * posisi yang sama.
-     */
-    document.addEventListener('submit', function (event) {
-
-        const form = event.target;
-
-        if (!(form instanceof HTMLFormElement)) {
-            return;
-        }
-
-        const actionInput =
-            form.querySelector('input[name="action"]');
-
-        if (!actionInput) {
-            return;
-        }
-
-        const action = actionInput.value;
-
-        if (
-            action === 'add_skill' ||
-            action === 'edit_skill' ||
-            action === 'delete_skill' ||
-            action === 'edit_training'
-        ) {
-            sessionStorage.setItem(
-                scrollStorageKey,
-                String(window.scrollY)
-            );
-        }
-
-    });
-
-
-    /*
-     * Kembalikan posisi setelah halaman hasil redirect selesai
-     * dimuat. Dua requestAnimationFrame digunakan agar layout,
-     * tabel, alert, dan elemen Bootstrap sudah selesai dirender.
-     */
-    window.addEventListener('load', function () {
-
-        const savedScroll =
-            sessionStorage.getItem(scrollStorageKey);
-
-        if (savedScroll === null) {
-            return;
-        }
-
-        sessionStorage.removeItem(scrollStorageKey);
-
-        const scrollPosition =
-            parseInt(savedScroll, 10);
-
-        if (Number.isNaN(scrollPosition)) {
-            return;
-        }
-
-        requestAnimationFrame(function () {
-
-            requestAnimationFrame(function () {
-
-                window.scrollTo({
-                    top: scrollPosition,
-                    left: 0,
-                    behavior: 'auto'
-                });
-
-            });
-
-        });
-
-    });
-
-})();
-
-
-/* =========================================================
-   DATA CHART
+   DATA GRAFIK
 ========================================================= */
 
 const skillChartData =
     <?= json_encode(
         $chart_data,
-        JSON_UNESCAPED_UNICODE |
-        JSON_UNESCAPED_SLASHES
+        JSON_UNESCAPED_UNICODE
+        | JSON_UNESCAPED_SLASHES
     ) ?>;
 
 
@@ -3637,7 +4387,36 @@ function getModal(id)
 
 
 /* =========================================================
-   SKILL SEARCH
+   KONFIRMASI HAPUS
+========================================================= */
+
+function confirmDeleteSkill(
+    skillName,
+    tahun,
+    nilai
+)
+{
+    const nama =
+        skillName || 'skill ini';
+
+    const tahunText =
+        tahun || '-';
+
+    const nilaiText =
+        Number(nilai).toFixed(0);
+
+    return confirm(
+        'Yakin ingin menghapus nilai assessment terbaru?\n\n' +
+        'Skill: ' + nama + '\n' +
+        'Tahun: ' + tahunText + '\n' +
+        'Nilai: ' + nilaiText + ' / 5\n\n' +
+        'Data yang dihapus tidak dapat dikembalikan.'
+    );
+}
+
+
+/* =========================================================
+   TAMBAH NILAI
 ========================================================= */
 
 const addSkillSearch =
@@ -3645,10 +4424,12 @@ const addSkillSearch =
         'add_skill_search'
     );
 
+
 const addSkillId =
     document.getElementById(
         'add_id_skill'
     );
+
 
 const skillList =
     document.getElementById(
@@ -3658,6 +4439,7 @@ const skillList =
 
 function setSelectedSkillId()
 {
+
     if (
         !addSkillSearch ||
         !addSkillId ||
@@ -3666,23 +4448,27 @@ function setSelectedSkillId()
         return;
     }
 
+
     const keyword =
         addSkillSearch.value
             .trim()
             .toLowerCase();
 
+
     let foundId = '';
+
 
     skillList
         .querySelectorAll('option')
-        .forEach(function(option) {
+        .forEach(function (option) {
 
-            if (
+            const skillName =
                 option.value
                     .trim()
-                    .toLowerCase()
-                === keyword
-            ) {
+                    .toLowerCase();
+
+
+            if (skillName === keyword) {
 
                 foundId =
                     option.dataset.id || '';
@@ -3690,7 +4476,9 @@ function setSelectedSkillId()
 
         });
 
-    addSkillId.value = foundId;
+
+    addSkillId.value =
+        foundId;
 }
 
 
@@ -3698,19 +4486,24 @@ if (addSkillSearch) {
 
     addSkillSearch.addEventListener(
         'input',
-        setSelectedSkillId
+        function () {
+
+            setSelectedSkillId();
+
+        }
     );
+
 
     addSkillSearch.addEventListener(
         'change',
-        setSelectedSkillId
+        function () {
+
+            setSelectedSkillId();
+
+        }
     );
 }
 
-
-/* =========================================================
-   TAMBAH SKILL
-========================================================= */
 
 function openAddSkill(
     skillId = '',
@@ -3718,20 +4511,24 @@ function openAddSkill(
     skillName = ''
 )
 {
-    const search =
+
+    const skillSearch =
         document.getElementById(
             'add_skill_search'
         );
 
-    const hidden =
+
+    const skillHidden =
         document.getElementById(
             'add_id_skill'
         );
+
 
     const tahunInput =
         document.getElementById(
             'add_tahun'
         );
+
 
     const title =
         document.getElementById(
@@ -3739,15 +4536,21 @@ function openAddSkill(
         );
 
 
-    if (hidden) {
-        hidden.value =
+    if (skillHidden) {
+
+        skillHidden.value =
             skillId || '';
+
     }
 
 
-    if (search) {
-        search.value =
+    if (skillSearch) {
+
+        skillSearch.value =
             skillName || '';
+
+        setSelectedSkillId();
+
     }
 
 
@@ -3756,6 +4559,7 @@ function openAddSkill(
         tahunInput.value =
             tahun ||
             <?= (int) $tahun_baru ?>;
+
     }
 
 
@@ -3763,20 +4567,28 @@ function openAddSkill(
 
         title.textContent =
             skillName
-                ? 'Tambah nilai: ' +
-                  skillName
+                ? 'Tambah nilai: ' + skillName
                 : 'Tambahkan nilai assessment.';
     }
 
 
-    getModal(
-        'modalAddSkill'
-    )?.show();
+    const modal =
+        getModal(
+            'modalAddSkill'
+        );
+
+
+    if (modal) {
+
+        modal.show();
+
+    }
+
 }
 
 
 /* =========================================================
-   EDIT SKILL
+   EDIT NILAI TERBARU
 ========================================================= */
 
 function openEditSkill(
@@ -3789,35 +4601,42 @@ function openEditSkill(
     skillName
 )
 {
+
     const idInput =
         document.getElementById(
             'edit_id_penilaian'
         );
+
 
     const tahunInput =
         document.getElementById(
             'edit_tahun_display'
         );
 
+
     const nilaiInput =
         document.getElementById(
             'edit_nilai'
         );
+
 
     const tanggalInput =
         document.getElementById(
             'edit_tanggal'
         );
 
+
     const assessorInput =
         document.getElementById(
             'edit_assessor'
         );
 
+
     const catatanInput =
         document.getElementById(
             'edit_catatan'
         );
+
 
     const title =
         document.getElementById(
@@ -3826,28 +4645,42 @@ function openEditSkill(
 
 
     if (idInput) {
-        idInput.value = id;
+
+        idInput.value =
+            id;
     }
+
 
     if (tahunInput) {
-        tahunInput.value = tahun;
+
+        tahunInput.value =
+            tahun;
     }
+
 
     if (nilaiInput) {
-        nilaiInput.value = nilai;
+
+        nilaiInput.value =
+            nilai;
     }
 
+
     if (tanggalInput) {
+
         tanggalInput.value =
             tanggal || '';
     }
 
+
     if (assessorInput) {
+
         assessorInput.value =
             assessor || '';
     }
 
+
     if (catatanInput) {
+
         catatanInput.value =
             catatan || '';
     }
@@ -3857,81 +4690,28 @@ function openEditSkill(
 
         title.textContent =
             skillName
-                ? 'Edit nilai: ' +
-                  skillName
+                ? 'Edit nilai: ' + skillName
                 : 'Edit nilai terbaru.';
     }
 
 
-    getModal(
-        'modalEditSkill'
-    )?.show();
+    const modal =
+        getModal(
+            'modalEditSkill'
+        );
+
+
+    if (modal) {
+
+        modal.show();
+
+    }
+
 }
 
 
 /* =========================================================
-   HAPUS SKILL
-========================================================= */
-
-function openDeleteSkill(
-    id,
-    skillName,
-    tahun,
-    nilai
-)
-{
-    const idInput =
-        document.getElementById(
-            'delete_id_penilaian'
-        );
-
-    const nameElement =
-        document.getElementById(
-            'delete_skill_name'
-        );
-
-    const yearElement =
-        document.getElementById(
-            'delete_skill_year'
-        );
-
-    const valueElement =
-        document.getElementById(
-            'delete_skill_value'
-        );
-
-
-    if (idInput) {
-        idInput.value = id;
-    }
-
-
-    if (nameElement) {
-        nameElement.textContent =
-            skillName || '-';
-    }
-
-
-    if (yearElement) {
-        yearElement.textContent =
-            tahun || '-';
-    }
-
-
-    if (valueElement) {
-        valueElement.textContent =
-            nilai ?? '-';
-    }
-
-
-    getModal(
-        'modalDeleteSkill'
-    )?.show();
-}
-
-
-/* =========================================================
-   CHART
+   DETAIL GRAFIK SKILL
 ========================================================= */
 
 let skillDetailChart = null;
@@ -3942,23 +4722,28 @@ function openSkillDetail(
     skillName
 )
 {
+
     const data =
         skillChartData[skillId];
+
 
     const title =
         document.getElementById(
             'detailSkillTitle'
         );
 
+
     const name =
         document.getElementById(
             'detailSkillName'
         );
 
+
     const canvas =
         document.getElementById(
             'skillDetailChart'
         );
+
 
     const empty =
         document.getElementById(
@@ -3966,15 +4751,84 @@ function openSkillDetail(
         );
 
 
+    const latestValue =
+        document.getElementById(
+            'detailLatestValue'
+        );
+
+
+    const latestMeta =
+        document.getElementById(
+            'detailLatestMeta'
+        );
+
+
+    const targetValue =
+        document.getElementById(
+            'detailTargetValue'
+        );
+
+
+    const targetBadge =
+        document.getElementById(
+            'detailSkillTarget'
+        );
+
+
+    const developmentValue =
+        document.getElementById(
+            'detailDevelopmentValue'
+        );
+
+
+    const developmentMeta =
+        document.getElementById(
+            'detailDevelopmentMeta'
+        );
+
+
+    const countValue =
+        document.getElementById(
+            'detailCountValue'
+        );
+
+
+    const averageValue =
+        document.getElementById(
+            'detailAverageValue'
+        );
+
+
+    const developmentNote =
+        document.getElementById(
+            'detailDevelopmentNote'
+        );
+
+
+    const TARGET = 3;
+
+
     if (title) {
         title.textContent =
-            'Detail Penilaian';
+            'Detail Penilaian Skill';
     }
 
 
     if (name) {
         name.textContent =
             skillName || '-';
+    }
+
+
+    if (targetValue) {
+        targetValue.textContent =
+            TARGET;
+    }
+
+
+    if (targetBadge) {
+        targetBadge.textContent =
+            TARGET;
     }
 
 
@@ -3986,33 +4840,336 @@ function openSkillDetail(
     }
 
 
+    const history =
+        data &&
+        Array.isArray(data.labels) &&
+        Array.isArray(data.values)
+
+            ? data.labels
+                .map(function (year, index) {
+
+                    return {
+
+                        tahun:
+                            String(year),
+
+                        nilai:
+                            data.values[index] === null ||
+                            data.values[index] === undefined
+
+                                ? null
+
+                                : Number(
+                                    data.values[index]
+                                )
+                    };
+
+                })
+                .filter(function (item) {
+
+                    return (
+                        item.nilai !== null &&
+                        !Number.isNaN(item.nilai)
+                    );
+
+                })
+
+            : [];
+
+
+    if (countValue) {
+
+        countValue.textContent =
+            history.length;
+    }
+
+
+    if (history.length > 0) {
+
+        const first =
+            history[0];
+
+
+        const latest =
+            history[
+                history.length - 1
+            ];
+
+
+        const sum =
+            history.reduce(
+                function (
+                    total,
+                    item
+                ) {
+
+                    return (
+                        total +
+                        item.nilai
+                    );
+
+                },
+                0
+            );
+
+
+        const average =
+            sum / history.length;
+
+
+        /*
+         * PERKEMBANGAN
+         * nilai terbaru - nilai pertama
+         */
+
+        const development =
+            latest.nilai -
+            first.nilai;
+
+
+        if (latestValue) {
+
+            latestValue.textContent =
+                latest.nilai.toFixed(0);
+        }
+
+
+        if (latestMeta) {
+
+            latestMeta.innerHTML =
+                '<i class="bi bi-star-fill"></i>' +
+                'Tahun ' +
+                latest.tahun;
+        }
+
+
+        if (averageValue) {
+
+            averageValue.textContent =
+                average.toFixed(2);
+        }
+
+
+        if (developmentValue) {
+
+            if (development > 0) {
+
+                developmentValue.textContent =
+                    '+' +
+                    development.toFixed(0);
+
+            } else if (development < 0) {
+
+                developmentValue.textContent =
+                    development.toFixed(0);
+
+            } else {
+
+                developmentValue.textContent =
+                    '0';
+            }
+        }
+
+
+        if (developmentMeta) {
+
+            let icon =
+                'bi bi-dash-circle';
+
+            let text =
+                'Tetap';
+
+
+            if (development > 0) {
+
+                icon =
+                    'bi bi-arrow-up-circle';
+
+                text =
+                    'Meningkat';
+
+            } else if (development < 0) {
+
+                icon =
+                    'bi bi-arrow-down-circle';
+
+                text =
+                    'Menurun';
+            }
+
+
+            developmentMeta.innerHTML =
+                '<i class="' +
+                icon +
+                '"></i>' +
+                text;
+        }
+
+
+        if (developmentNote) {
+
+            let description;
+
+
+            if (history.length === 1) {
+
+                description =
+                    'Baru ada 1 penilaian pada tahun <strong>' +
+                    first.tahun +
+                    '</strong>, sehingga perkembangan belum dapat dibandingkan.';
+
+            } else if (development > 0) {
+
+                description =
+                    'Perkembangan dari <strong>' +
+                    first.nilai.toFixed(0) +
+                    '</strong> (' +
+                    first.tahun +
+                    ') menjadi <strong>' +
+                    latest.nilai.toFixed(0) +
+                    '</strong> (' +
+                    latest.tahun +
+                    ') — meningkat <strong>+' +
+                    development.toFixed(0) +
+                    '</strong> poin.';
+
+            } else if (development < 0) {
+
+                description =
+                    'Perkembangan dari <strong>' +
+                    first.nilai.toFixed(0) +
+                    '</strong> (' +
+                    first.tahun +
+                    ') menjadi <strong>' +
+                    latest.nilai.toFixed(0) +
+                    '</strong> (' +
+                    latest.tahun +
+                    ') — menurun <strong>' +
+                    development.toFixed(0) +
+                    '</strong> poin.';
+
+            } else {
+
+                description =
+                    'Perkembangan dari <strong>' +
+                    first.nilai.toFixed(0) +
+                    '</strong> (' +
+                    first.tahun +
+                    ') menjadi <strong>' +
+                    latest.nilai.toFixed(0) +
+                    '</strong> (' +
+                    latest.tahun +
+                    ') — tetap.';
+            }
+
+
+            developmentNote.innerHTML =
+                description;
+
+
+            developmentNote.classList.remove(
+                'd-none'
+            );
+        }
+
+
+    } else {
+
+
+        if (latestValue) {
+
+            latestValue.textContent =
+                '-';
+        }
+
+
+        if (latestMeta) {
+
+            latestMeta.innerHTML =
+                '<i class="bi bi-star"></i>Tahun -';
+        }
+
+
+        if (developmentValue) {
+
+            developmentValue.textContent =
+                '-';
+        }
+
+
+        if (developmentMeta) {
+
+            developmentMeta.innerHTML =
+                '<i class="bi bi-dash-circle"></i>Belum ada perkembangan';
+        }
+
+
+        if (averageValue) {
+
+            averageValue.textContent =
+                '-';
+        }
+
+
+        if (developmentNote) {
+
+            developmentNote.classList.add(
+                'd-none'
+            );
+        }
+    }
+
+
     if (
         !canvas ||
-        !data ||
-        !data.labels.length
+        history.length === 0
     ) {
 
         if (canvas) {
+
             canvas.style.display =
                 'none';
         }
 
+
         if (empty) {
+
             empty.classList.remove(
                 'd-none'
             );
         }
+
 
     } else {
 
         canvas.style.display =
             'block';
 
+
         if (empty) {
+
             empty.classList.add(
                 'd-none'
             );
         }
+
+
+        const labels =
+            history.map(
+                function (item) {
+
+                    return item.tahun;
+                }
+            );
+
+
+        const values =
+            history.map(
+                function (item) {
+
+                    return item.nilai;
+                }
+            );
 
 
         skillDetailChart =
@@ -4022,38 +5179,82 @@ function openSkillDetail(
 
                     type: 'line',
 
+
                     data: {
 
-                        labels:
-                            data.labels,
+                        labels: labels,
+
 
                         datasets: [
 
                             {
-                                label: 'Nilai',
+
+                                label:
+                                    'Nilai Aktual',
+
                                 data:
-                                    data.values,
-                                borderWidth: 2,
-                                pointRadius: 5,
-                                pointHoverRadius: 7,
-                                tension: 0.25,
-                                fill: false
+                                    values,
+
+                                borderColor:
+                                    '#2f9be8',
+
+                                backgroundColor:
+                                    'rgba(47,155,232,0.10)',
+
+                                borderWidth:
+                                    3,
+
+                                pointRadius:
+                                    5,
+
+                                pointHoverRadius:
+                                    7,
+
+                                pointBorderWidth:
+                                    2,
+
+                                tension:
+                                    0.25,
+
+                                fill:
+                                    true
+
                             },
 
+
                             {
-                                label: 'Target',
+
+                                label:
+                                    'Target (Minimum)',
+
                                 data:
-                                    data.labels.map(
-                                        () => 3
+                                    labels.map(
+                                        function () {
+                                            return TARGET;
+                                        }
                                     ),
-                                borderWidth: 1,
-                                borderDash: [
-                                    6,
-                                    5
-                                ],
-                                pointRadius: 0,
-                                tension: 0,
-                                fill: false
+
+                                borderColor:
+                                    '#ff7d98',
+
+                                borderWidth:
+                                    2,
+
+                                borderDash:
+                                    [7, 6],
+
+                                pointRadius:
+                                    0,
+
+                                pointHoverRadius:
+                                    0,
+
+                                tension:
+                                    0,
+
+                                fill:
+                                    false
+
                             }
 
                         ]
@@ -4063,26 +5264,54 @@ function openSkillDetail(
 
                     options: {
 
-                        responsive: true,
-                        maintainAspectRatio: false,
+                        responsive:
+                            true,
+
+                        maintainAspectRatio:
+                            false,
+
+                        interaction: {
+
+                            intersect:
+                                false,
+
+                            mode:
+                                'index'
+                        },
 
 
                         scales: {
 
                             y: {
 
-                                min: 0,
-                                max: 5,
+                                min:
+                                    0,
+
+                                max:
+                                    5,
 
                                 ticks: {
-                                    stepSize: 1
+
+                                    stepSize:
+                                        1,
+
+                                    precision:
+                                        0
                                 },
 
                                 title: {
 
-                                    display: true,
-                                    text: 'Nilai'
+                                    display:
+                                        true,
 
+                                    text:
+                                        'Nilai'
+                                },
+
+                                grid: {
+
+                                    color:
+                                        '#e9edf3'
                                 }
 
                             },
@@ -4092,9 +5321,17 @@ function openSkillDetail(
 
                                 title: {
 
-                                    display: true,
-                                    text: 'Tahun'
+                                    display:
+                                        true,
 
+                                    text:
+                                        'Tahun'
+                                },
+
+                                grid: {
+
+                                    display:
+                                        false
                                 }
 
                             }
@@ -4106,9 +5343,8 @@ function openSkillDetail(
 
                             legend: {
 
-                                display: true,
-                                position: 'top'
-
+                                display:
+                                    false
                             },
 
 
@@ -4117,23 +5353,32 @@ function openSkillDetail(
                                 callbacks: {
 
                                     title:
-                                        function(context)
-                                        {
+                                        function (
+                                            context
+                                        ) {
+
                                             return (
                                                 'Tahun ' +
                                                 context[0].label
                                             );
+
                                         },
 
 
                                     label:
-                                        function(context)
-                                        {
+                                        function (
+                                            context
+                                        ) {
+
                                             return (
                                                 context.dataset.label +
                                                 ': ' +
-                                                context.parsed.y
+                                                Number(
+                                                    context.parsed.y
+                                                ).toFixed(0) +
+                                                ' / 5'
                                             );
+
                                         }
 
                                 }
@@ -4149,9 +5394,62 @@ function openSkillDetail(
     }
 
 
-    getModal(
-        'modalSkillDetail'
-    )?.show();
+    const modal =
+        getModal(
+            'modalSkillDetail'
+        );
+
+
+    if (modal) {
+
+        modal.show();
+    }
+
+}
+
+
+
+/* =========================================================
+   TOGGLE SKILL MAPPING
+========================================================= */
+
+function toggleSkillMapping()
+{
+    const rows = document.querySelectorAll(
+        '.skill-extra-row'
+    );
+
+    const button = document.getElementById(
+        'skillMappingMoreBtn'
+    );
+
+    const text = document.getElementById(
+        'skillMappingMoreText'
+    );
+
+    if (!rows.length || !button || !text) {
+        return;
+    }
+
+    const expanded =
+        button.classList.contains('expanded');
+
+    rows.forEach(function (row) {
+        row.classList.toggle(
+            'd-none',
+            expanded
+        );
+    });
+
+    button.classList.toggle(
+        'expanded',
+        !expanded
+    );
+
+    text.textContent =
+        expanded
+            ? 'Lihat semua skill'
+            : 'Sembunyikan skill';
 }
 
 
@@ -4165,15 +5463,18 @@ function openEditTraining(
     namaTraining
 )
 {
+
     const idInput =
         document.getElementById(
             'training_id_peserta'
         );
 
+
     const hasilInput =
         document.getElementById(
             'training_hasil'
         );
+
 
     const title =
         document.getElementById(
@@ -4182,12 +5483,14 @@ function openEditTraining(
 
 
     if (idInput) {
+
         idInput.value =
             idPeserta;
     }
 
 
     if (hasilInput) {
+
         hasilInput.value =
             hasil || '';
     }
@@ -4203,14 +5506,22 @@ function openEditTraining(
     }
 
 
-    getModal(
-        'modalEditTraining'
-    )?.show();
+    const modal =
+        getModal(
+            'modalEditTraining'
+        );
+
+
+    if (modal) {
+
+        modal.show();
+    }
+
 }
 
 
 /* =========================================================
-   RESIZE CHART
+   FIX CHART SAAT MODAL DIBUKA
 ========================================================= */
 
 const detailModal =
@@ -4218,11 +5529,12 @@ const detailModal =
         'modalSkillDetail'
     );
 
+
 if (detailModal) {
 
     detailModal.addEventListener(
         'shown.bs.modal',
-        function() {
+        function () {
 
             if (skillDetailChart) {
 
@@ -4231,43 +5543,6 @@ if (detailModal) {
 
         }
     );
-
-}
-
-
-/* =========================================================
-   VALIDASI SKILL
-========================================================= */
-
-const addForm =
-    document.querySelector(
-        '#modalAddSkill form'
-    );
-
-if (addForm) {
-
-    addForm.addEventListener(
-        'submit',
-        function(event) {
-
-            setSelectedSkillId();
-
-            if (
-                !addSkillId.value
-            ) {
-
-                event.preventDefault();
-
-                alert(
-                    'Silakan pilih skill yang tersedia dari daftar.'
-                );
-
-                addSkillSearch?.focus();
-            }
-
-        }
-    );
-
 }
 
 </script>
@@ -4277,13 +5552,51 @@ if (addForm) {
 
 require __DIR__ . '/../partials/footer.php';
 
-
-/*
-|--------------------------------------------------------------------------
-| FLUSH OUTPUT BUFFER
-|--------------------------------------------------------------------------
-*/
-
-ob_end_flush();
-
 ?>
+
+<script>
+/* =========================================================
+   KEMBALI KE SKILL TERAKHIR SETELAH POST / REDIRECT
+========================================================= */
+(function () {
+    if (!window.history || !('scrollRestoration' in window.history)) return;
+
+    window.history.scrollRestoration = 'manual';
+
+    function restoreSkillPosition() {
+        var hash = window.location.hash || '';
+
+        if (!hash || hash.indexOf('#skill-row-') !== 0) {
+            return;
+        }
+
+        var target = document.getElementById(hash.substring(1));
+
+        if (!target) return;
+
+        /*
+         * Dua frame diperlukan karena tinggi halaman dapat berubah
+         * setelah Bootstrap/modal/chart selesai dirender.
+         */
+        requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+                target.scrollIntoView({
+                    behavior: 'auto',
+                    block: 'center'
+                });
+
+                /* Pastikan browser tidak mengembalikan ke posisi scroll lama. */
+                setTimeout(function () {
+                    target.scrollIntoView({
+                        behavior: 'auto',
+                        block: 'center'
+                    });
+                }, 100);
+            });
+        });
+    }
+
+    window.addEventListener('load', restoreSkillPosition);
+    document.addEventListener('DOMContentLoaded', restoreSkillPosition);
+})();
+</script>

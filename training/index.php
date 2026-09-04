@@ -3,15 +3,57 @@
 /* =========================================================
    GARUDAFOOD SKILL MONITORING
    JADWAL TRAINING
+   CRUD TRAINING + CRUD SKILL
+========================================================= */
+
+
+/* =========================================================
+   KONEKSI DATABASE
+   WAJIB SEBELUM QUERY APA PUN
+========================================================= */
+
+require_once __DIR__ . '/../config/database.php';
+
+
+/* =========================================================
+   CEK KONEKSI
+========================================================= */
+
+if (!isset($conn) || !($conn instanceof mysqli)) {
+    die('Koneksi database tidak tersedia.');
+}
+
+
+/* =========================================================
+   PAGE TITLE
 ========================================================= */
 
 $page_title = 'Jadwal Training';
 
-require __DIR__ . '/../partials/header.php';
-
 
 /* =========================================================
    HELPER
+========================================================= */
+
+function e($value)
+{
+    return htmlspecialchars(
+        (string)$value,
+        ENT_QUOTES,
+        'UTF-8'
+    );
+}
+
+
+function redirectPage($url)
+{
+    header('Location: ' . $url);
+    exit;
+}
+
+
+/* =========================================================
+   VARIABEL PESAN
 ========================================================= */
 
 $success = '';
@@ -19,72 +61,176 @@ $error   = '';
 
 
 /* =========================================================
-   PESAN
+   STATUS TRAINING
 ========================================================= */
 
-if (isset($_GET['saved'])) {
-    $success = 'Jadwal training berhasil dibuat.';
-}
-
-if (isset($_GET['updated'])) {
-    $success = 'Jadwal training berhasil diperbarui.';
-}
-
-if (isset($_GET['deleted'])) {
-    $success = 'Jadwal training berhasil dihapus.';
-}
+$valid_status = [
+    'Terjadwal',
+    'Berlangsung',
+    'Selesai',
+    'Terlambat',
+    'Dibatalkan'
+];
 
 
 /* =========================================================
-   DATA SKILL
+   PESERTA TRAINING - HELPER OTOMATIS
 ========================================================= */
+function syncAutoTrainingParticipants($conn, $trainingId, $skillId)
+{
+    $trainingId = (int)$trainingId;
+    $skillId = (int)$skillId;
 
-$skills = [];
-
-$qSkills = $conn->query("
-    SELECT
-        id,
-        nama_skill
-    FROM skill
-    WHERE status = 'Aktif'
-    ORDER BY nama_skill ASC
-");
-
-if ($qSkills) {
-
-    while ($row = $qSkills->fetch_assoc()) {
-
-        $skills[] = $row;
-
+    if ($trainingId <= 0 || $skillId <= 0) {
+        return;
     }
 
-}
+    /*
+     * Ambil tahun penilaian TERBARU KHUSUS untuk skill training.
+     * Jika skill tersebut BELUM PERNAH dinilai sama sekali, $latestYear
+     * akan bernilai 0. Dalam kondisi tersebut semua pekerja aktif tetap
+     * dianggap belum memiliki penilaian dan otomatis masuk peserta.
+     */
+    $latestYear = 0;
 
+    $stmtYear = $conn->prepare("
+        SELECT COALESCE(MAX(tahun), 0) AS tahun
+        FROM penilaian_skill
+        WHERE id_skill = ?
+          AND nilai IS NOT NULL
+    ");
 
-/* =========================================================
-   DATA JABATAN
-========================================================= */
+    if ($stmtYear) {
+        $stmtYear->bind_param('i', $skillId);
 
-$jabatan = [];
+        if ($stmtYear->execute()) {
+            $yearRow = $stmtYear->get_result()->fetch_assoc();
+            $latestYear = (int)($yearRow['tahun'] ?? 0);
+        }
 
-$qJabatan = $conn->query("
-    SELECT
-        id,
-        nama_jabatan
-    FROM jabatan
-    ORDER BY nama_jabatan ASC
-");
-
-if ($qJabatan) {
-
-    while ($row = $qJabatan->fetch_assoc()) {
-
-        $jabatan[] = $row;
-
+        $stmtYear->close();
     }
 
+    /*
+     * LOGIKA PESERTA OTOMATIS
+     *
+     * 1. Pekerja harus Aktif.
+     * 2. Jika BELUM ADA penilaian untuk skill training pada tahun terbaru
+     *    -> MASUK peserta otomatis.
+     * 3. Jika SUDAH ADA penilaian dan nilainya < 2,5
+     *    -> MASUK peserta otomatis.
+     * 4. Jika nilainya >= 2,5
+     *    -> TIDAK dimasukkan otomatis.
+     * 5. Peserta manual yang sudah ada tidak diubah.
+     *
+     * LEFT JOIN sengaja digunakan agar pekerja yang belum memiliki
+     * penilaian tetap muncul sebagai kandidat peserta.
+     */
+    $stmt = $conn->prepare("
+        INSERT INTO training_peserta
+            (id_training, id_pekerja, sumber)
+        SELECT
+            ?,
+            p.id,
+            'otomatis'
+        FROM pekerja p
+        LEFT JOIN penilaian_skill ps
+            ON ps.id_pekerja = p.id
+           AND ps.id_skill = ?
+           AND ps.tahun = ?
+           AND ps.nilai IS NOT NULL
+        WHERE p.status = 'Aktif'
+          AND (
+                ps.id IS NULL
+                OR ps.nilai < 2.5
+          )
+          AND NOT EXISTS (
+                SELECT 1
+                FROM training_peserta tp
+                WHERE tp.id_training = ?
+                  AND tp.id_pekerja = p.id
+          )
+    ");
+
+    if ($stmt) {
+        $stmt->bind_param(
+            'iiii',
+            $trainingId,
+            $skillId,
+            $latestYear,
+            $trainingId
+        );
+
+        $stmt->execute();
+        $stmt->close();
+    }
 }
 
+function jsonResponse($data)
+{
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP);
+    exit;
+}
+
+if (isset($_GET['participant_data'])) {
+    $trainingId = (int)$_GET['participant_data'];
+    if ($trainingId <= 0) jsonResponse(['success'=>false,'message'=>'ID training tidak valid.']);
+
+    $stmt = $conn->prepare("SELECT t.id,t.nama_training,t.id_skill,s.nama_skill FROM training t LEFT JOIN skill s ON s.id=t.id_skill WHERE t.id=? LIMIT 1");
+    if (!$stmt) jsonResponse(['success'=>false,'message'=>'Gagal membaca data training.']);
+    $stmt->bind_param('i',$trainingId); $stmt->execute();
+    $trainingData=$stmt->get_result()->fetch_assoc(); $stmt->close();
+    if (!$trainingData) jsonResponse(['success'=>false,'message'=>'Data training tidak ditemukan.']);
+
+    $skillId=(int)($trainingData['id_skill']??0);
+
+    /* Tahun terbaru khusus skill training */
+    $latestYear = 0;
+    if ($skillId > 0) {
+        $stmtYear = $conn->prepare("
+            SELECT MAX(tahun) AS tahun
+            FROM penilaian_skill
+            WHERE id_skill = ?
+              AND nilai IS NOT NULL
+        ");
+        if ($stmtYear) {
+            $stmtYear->bind_param('i', $skillId);
+            $stmtYear->execute();
+            $yearRow = $stmtYear->get_result()->fetch_assoc();
+            $latestYear = (int)($yearRow['tahun'] ?? 0);
+            $stmtYear->close();
+        }
+    }
+
+    /* Pastikan data otomatis juga terisi saat modal peserta dibuka. */
+    if ($skillId > 0) {
+        syncAutoTrainingParticipants($conn, $trainingId, $skillId);
+    }
+
+    $participants=[];
+
+    $stmt=$conn->prepare("SELECT tp.id,tp.id_pekerja,tp.sumber,p.no_reg,p.nama,p.departemen,p.keterangan,
+        (SELECT ROUND(AVG(ps.nilai),2) FROM penilaian_skill ps WHERE ps.id_pekerja=p.id AND ps.id_skill=? AND ps.tahun=? AND ps.nilai IS NOT NULL) AS nilai
+        FROM training_peserta tp INNER JOIN pekerja p ON p.id=tp.id_pekerja WHERE tp.id_training=?
+        ORDER BY CASE WHEN tp.sumber='otomatis' THEN 1 ELSE 2 END, p.nama ASC");
+    if ($stmt) {
+        $stmt->bind_param('iii',$skillId,$latestYear,$trainingId); $stmt->execute(); $res=$stmt->get_result();
+        while($row=$res->fetch_assoc()){ $row['nilai']=$row['nilai']!==null?(float)$row['nilai']:null; $participants[]=$row; }
+        $stmt->close();
+    }
+
+    $workers=[];
+    $stmt=$conn->prepare("SELECT p.id,p.no_reg,p.nama,p.departemen,p.keterangan,
+        (SELECT ROUND(AVG(ps.nilai),2) FROM penilaian_skill ps WHERE ps.id_pekerja=p.id AND ps.id_skill=? AND ps.tahun=? AND ps.nilai IS NOT NULL) AS nilai
+        FROM pekerja p WHERE p.status='Aktif' ORDER BY p.nama ASC");
+    if ($stmt) {
+        $stmt->bind_param('ii',$skillId,$latestYear); $stmt->execute(); $res=$stmt->get_result();
+        while($row=$res->fetch_assoc()){ $row['nilai']=$row['nilai']!==null?(float)$row['nilai']:null; $workers[]=$row; }
+        $stmt->close();
+    }
+    jsonResponse(['success'=>true,'training'=>$trainingData,'latest_year'=>$latestYear,'participants'=>$participants,'workers'=>$workers]);
+}
 
 /* =========================================================
    POST ACTION
@@ -96,24 +242,479 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
     /* =====================================================
-       SIMPAN / UPDATE
+       =====================================================
+       CRUD SKILL
+       =====================================================
+       ===================================================== */
+
+
+    /* =====================================================
+       TAMBAH SKILL
     ===================================================== */
 
-    if ($action === 'save') {
+    if ($action === 'add_skill') {
 
-        $id = (int) ($_POST['id'] ?? 0);
+        $nama_skill = trim(
+            $_POST['nama_skill'] ?? ''
+        );
+
+        $status_skill = $_POST['status_skill'] ?? 'Aktif';
+
+
+        if ($nama_skill === '') {
+
+            $error = 'Nama skill wajib diisi.';
+
+        } elseif (
+            !in_array(
+                $status_skill,
+                ['Aktif', 'Nonaktif'],
+                true
+            )
+        ) {
+
+            $error = 'Status skill tidak valid.';
+
+        } else {
+
+            /* Cek duplikat */
+
+            $stmtCheck = $conn->prepare("
+                SELECT id
+                FROM skill
+                WHERE LOWER(TRIM(nama_skill)) = LOWER(TRIM(?))
+                LIMIT 1
+            ");
+
+            if (!$stmtCheck) {
+
+                $error =
+                    'Gagal mengecek skill: ' .
+                    $conn->error;
+
+            } else {
+
+                $stmtCheck->bind_param(
+                    's',
+                    $nama_skill
+                );
+
+                $stmtCheck->execute();
+
+                $resultCheck =
+                    $stmtCheck->get_result();
+
+                $existing =
+                    $resultCheck->fetch_assoc();
+
+                $stmtCheck->close();
+
+
+                if ($existing) {
+
+                    $error =
+                        'Skill "' .
+                        e($nama_skill) .
+                        '" sudah terdaftar.';
+
+                } else {
+
+                    $stmt = $conn->prepare("
+                        INSERT INTO skill
+                        (
+                            nama_skill,
+                            status
+                        )
+                        VALUES
+                        (
+                            ?,
+                            ?
+                        )
+                    ");
+
+                    if (!$stmt) {
+
+                        $error =
+                            'Gagal menyiapkan tambah skill: ' .
+                            $conn->error;
+
+                    } else {
+
+                        $stmt->bind_param(
+                            'ss',
+                            $nama_skill,
+                            $status_skill
+                        );
+
+                        if ($stmt->execute()) {
+
+                            $newSkillId =
+                                $stmt->insert_id;
+
+                            $stmt->close();
+
+                            redirectPage(
+                                'index.php?skill_added=' .
+                                $newSkillId
+                            );
+
+                        } else {
+
+                            $error =
+                                'Skill gagal ditambahkan: ' .
+                                $stmt->error;
+
+                            $stmt->close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+    /* =====================================================
+       UPDATE SKILL
+    ===================================================== */
+
+    elseif ($action === 'update_skill') {
+
+        $skill_id =
+            (int)($_POST['skill_id'] ?? 0);
+
+        $nama_skill =
+            trim(
+                $_POST['nama_skill'] ?? ''
+            );
+
+        $status_skill =
+            $_POST['status_skill'] ?? 'Aktif';
+
+
+        if ($skill_id <= 0) {
+
+            $error =
+                'ID skill tidak valid.';
+
+        } elseif ($nama_skill === '') {
+
+            $error =
+                'Nama skill wajib diisi.';
+
+        } elseif (
+            !in_array(
+                $status_skill,
+                ['Aktif', 'Nonaktif'],
+                true
+            )
+        ) {
+
+            $error =
+                'Status skill tidak valid.';
+
+        } else {
+
+            /* Cek nama duplikat */
+
+            $stmtCheck = $conn->prepare("
+                SELECT id
+                FROM skill
+                WHERE LOWER(TRIM(nama_skill)) = LOWER(TRIM(?))
+                  AND id <> ?
+                LIMIT 1
+            ");
+
+            if (!$stmtCheck) {
+
+                $error =
+                    'Gagal mengecek skill: ' .
+                    $conn->error;
+
+            } else {
+
+                $stmtCheck->bind_param(
+                    'si',
+                    $nama_skill,
+                    $skill_id
+                );
+
+                $stmtCheck->execute();
+
+                $existing =
+                    $stmtCheck
+                        ->get_result()
+                        ->fetch_assoc();
+
+                $stmtCheck->close();
+
+
+                if ($existing) {
+
+                    $error =
+                        'Nama skill tersebut sudah digunakan.';
+
+                } else {
+
+                    $stmt = $conn->prepare("
+                        UPDATE skill
+                        SET
+                            nama_skill = ?,
+                            status = ?
+                        WHERE id = ?
+                    ");
+
+                    if (!$stmt) {
+
+                        $error =
+                            'Gagal menyiapkan update skill: ' .
+                            $conn->error;
+
+                    } else {
+
+                        $stmt->bind_param(
+                            'ssi',
+                            $nama_skill,
+                            $status_skill,
+                            $skill_id
+                        );
+
+                        if ($stmt->execute()) {
+
+                            $stmt->close();
+
+                            redirectPage(
+                                'index.php?skill_updated=1'
+                            );
+
+                        } else {
+
+                            $error =
+                                'Skill gagal diperbarui: ' .
+                                $stmt->error;
+
+                            $stmt->close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+    /* =====================================================
+       TOGGLE STATUS SKILL
+    ===================================================== */
+
+    elseif ($action === 'toggle_skill') {
+
+        $skill_id =
+            (int)($_POST['skill_id'] ?? 0);
+
+
+        if ($skill_id <= 0) {
+
+            $error =
+                'ID skill tidak valid.';
+
+        } else {
+
+            $stmt = $conn->prepare("
+                UPDATE skill
+                SET status =
+                    CASE
+                        WHEN status = 'Aktif'
+                        THEN 'Nonaktif'
+                        ELSE 'Aktif'
+                    END
+                WHERE id = ?
+            ");
+
+            if (!$stmt) {
+
+                $error =
+                    'Gagal menyiapkan perubahan status: ' .
+                    $conn->error;
+
+            } else {
+
+                $stmt->bind_param(
+                    'i',
+                    $skill_id
+                );
+
+                if ($stmt->execute()) {
+
+                    $stmt->close();
+
+                    redirectPage(
+                        'index.php?skill_status=1'
+                    );
+
+                } else {
+
+                    $error =
+                        'Status skill gagal diubah: ' .
+                        $stmt->error;
+
+                    $stmt->close();
+                }
+            }
+        }
+    }
+
+
+    /* =====================================================
+       HAPUS SKILL
+    ===================================================== */
+
+    elseif ($action === 'delete_skill') {
+
+        $skill_id =
+            (int)($_POST['skill_id'] ?? 0);
+
+
+        if ($skill_id <= 0) {
+
+            $error =
+                'ID skill tidak valid.';
+
+        } else {
+
+            /*
+             * Cek apakah skill digunakan di training
+             */
+
+            $stmtCheckTraining = $conn->prepare("
+                SELECT COUNT(*) AS jumlah
+                FROM training
+                WHERE id_skill = ?
+            ");
+
+            $trainingUsed = 0;
+
+            if ($stmtCheckTraining) {
+
+                $stmtCheckTraining->bind_param(
+                    'i',
+                    $skill_id
+                );
+
+                $stmtCheckTraining->execute();
+
+                $trainingResult =
+                    $stmtCheckTraining
+                        ->get_result()
+                        ->fetch_assoc();
+
+                $trainingUsed =
+                    (int)($trainingResult['jumlah'] ?? 0);
+
+                $stmtCheckTraining->close();
+            }
+
+
+            /*
+             * Cek apakah skill digunakan di penilaian
+             */
+
+            $assessmentUsed = 0;
+
+            $checkAssessment =
+                $conn->query("
+                    SELECT COUNT(*) AS jumlah
+                    FROM penilaian_skill
+                    WHERE id_skill = " .
+                    $skill_id
+                );
+
+            if ($checkAssessment) {
+
+                $assessmentRow =
+                    $checkAssessment->fetch_assoc();
+
+                $assessmentUsed =
+                    (int)($assessmentRow['jumlah'] ?? 0);
+            }
+
+
+            if (
+                $trainingUsed > 0 ||
+                $assessmentUsed > 0
+            ) {
+
+                $error =
+                    'Skill tidak dapat dihapus karena sudah digunakan pada data training atau penilaian skill. Gunakan Nonaktif jika skill tidak ingin digunakan lagi.';
+
+            } else {
+
+                $stmt = $conn->prepare("
+                    DELETE FROM skill
+                    WHERE id = ?
+                ");
+
+                if (!$stmt) {
+
+                    $error =
+                        'Gagal menyiapkan hapus skill: ' .
+                        $conn->error;
+
+                } else {
+
+                    $stmt->bind_param(
+                        'i',
+                        $skill_id
+                    );
+
+                    if ($stmt->execute()) {
+
+                        $stmt->close();
+
+                        redirectPage(
+                            'index.php?skill_deleted=1'
+                        );
+
+                    } else {
+
+                        $error =
+                            'Skill gagal dihapus: ' .
+                            $stmt->error;
+
+                        $stmt->close();
+                    }
+                }
+            }
+        }
+    }
+
+
+    /* =====================================================
+       =====================================================
+       CRUD JADWAL TRAINING
+       =====================================================
+       ===================================================== */
+
+
+    /* =====================================================
+       SIMPAN / UPDATE TRAINING
+    ===================================================== */
+
+    elseif ($action === 'save') {
+
+        $id =
+            (int)($_POST['id'] ?? 0);
 
         $nama_training =
-            trim($_POST['nama_training'] ?? '');
+            trim(
+                $_POST['nama_training'] ?? ''
+            );
 
         $id_skill =
-            (int) ($_POST['id_skill'] ?? 0);
-
-        $id_jabatan =
-            (int) ($_POST['id_jabatan'] ?? 0);
+            (int)($_POST['id_skill'] ?? 0);
 
         $trainer =
-            trim($_POST['trainer'] ?? '');
+            trim(
+                $_POST['trainer'] ?? ''
+            );
 
         $tanggal_mulai =
             !empty($_POST['tanggal_mulai'])
@@ -126,55 +727,106 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 : null;
 
         $lokasi =
-            trim($_POST['lokasi'] ?? '');
+            trim(
+                $_POST['lokasi'] ?? ''
+            );
 
         $status =
             $_POST['status'] ?? 'Terjadwal';
 
         $catatan =
-            trim($_POST['catatan'] ?? '');
+            trim(
+                $_POST['catatan'] ?? ''
+            );
+
+
+        /* =================================================
+           JIKA ADA SKILL
+           Nama training otomatis mengikuti skill
+        ================================================= */
+
+        if ($id_skill > 0) {
+
+            $stmtSkillName =
+                $conn->prepare("
+                    SELECT nama_skill
+                    FROM skill
+                    WHERE id = ?
+                      AND status = 'Aktif'
+                    LIMIT 1
+                ");
+
+            if ($stmtSkillName) {
+
+                $stmtSkillName->bind_param(
+                    'i',
+                    $id_skill
+                );
+
+                $stmtSkillName->execute();
+
+                $skillRow =
+                    $stmtSkillName
+                        ->get_result()
+                        ->fetch_assoc();
+
+                $stmtSkillName->close();
+
+
+                if ($skillRow) {
+
+                    /*
+                     * Nama training disamakan dengan skill
+                     */
+                    $nama_training =
+                        trim(
+                            $skillRow['nama_skill']
+                        );
+
+                } else {
+
+                    $error =
+                        'Skill yang dipilih tidak ditemukan atau sudah nonaktif.';
+                }
+            }
+        }
 
 
         /* =================================================
            VALIDASI
         ================================================= */
 
-        if ($nama_training === '') {
+        if ($error === '') {
 
-            $error =
-                'Nama training wajib diisi.';
+            if ($nama_training === '') {
 
-        } elseif ($id_jabatan <= 0) {
+                $error =
+                    'Nama training wajib diisi.';
 
-            $error =
-                'Jabatan target wajib dipilih.';
+            } elseif ($id_skill <= 0) {
 
-        } elseif (
-            !in_array(
-                $status,
-                [
-                    'Terjadwal',
-                    'Berlangsung',
-                    'Selesai',
-                    'Terlambat',
-                    'Dibatalkan'
-                ],
-                true
-            )
-        ) {
+                $error =
+                    'Skill / Kompetensi wajib dipilih agar peserta otomatis dapat ditentukan berdasarkan nilai < 2,5.';
+            } elseif (
+                !in_array(
+                    $status,
+                    $valid_status,
+                    true
+                )
+            ) {
 
-            $error =
-                'Status training tidak valid.';
+                $error =
+                    'Status training tidak valid.';
 
-        } elseif (
-            $tanggal_mulai !== null &&
-            $tanggal_selesai !== null &&
-            $tanggal_selesai < $tanggal_mulai
-        ) {
+            } elseif (
+                $tanggal_mulai !== null &&
+                $tanggal_selesai !== null &&
+                $tanggal_selesai < $tanggal_mulai
+            ) {
 
-            $error =
-                'Tanggal selesai tidak boleh sebelum tanggal mulai.';
-
+                $error =
+                    'Tanggal selesai tidak boleh sebelum tanggal mulai.';
+            }
         }
 
 
@@ -184,18 +836,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($error === '') {
 
+
             /* =============================================
                UPDATE
             ============================================= */
 
             if ($id > 0) {
 
+                $oldSkillId = 0;
+                $stmtOldTraining = $conn->prepare("SELECT id_skill FROM training WHERE id = ? LIMIT 1");
+                if ($stmtOldTraining) {
+                    $stmtOldTraining->bind_param('i', $id);
+                    $stmtOldTraining->execute();
+                    $oldTrainingRow = $stmtOldTraining->get_result()->fetch_assoc();
+                    $oldSkillId = (int)($oldTrainingRow['id_skill'] ?? 0);
+                    $stmtOldTraining->close();
+                }
+
                 $stmt = $conn->prepare("
                     UPDATE training
                     SET
                         nama_training = ?,
                         id_skill = ?,
-                        id_jabatan = ?,
                         trainer = ?,
                         tanggal_mulai = ?,
                         tanggal_selesai = ?,
@@ -209,16 +871,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$stmt) {
 
                     $error =
-                        'Gagal menyiapkan query update: '
-                        . $conn->error;
+                        'Gagal menyiapkan query update: ' .
+                        $conn->error;
 
                 } else {
 
                     $stmt->bind_param(
-                        'siissssssi',
+                        'sissssssi',
                         $nama_training,
                         $id_skill,
-                        $id_jabatan,
                         $trainer,
                         $tanggal_mulai,
                         $tanggal_selesai,
@@ -233,25 +894,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         $stmt->close();
 
-                        header(
-                            'Location: index.php?updated=1'
+                        if ($oldSkillId !== $id_skill) {
+                            $stmtCleanAuto = $conn->prepare("DELETE FROM training_peserta WHERE id_training = ? AND sumber = 'otomatis'");
+                            if ($stmtCleanAuto) { $stmtCleanAuto->bind_param('i', $id); $stmtCleanAuto->execute(); $stmtCleanAuto->close(); }
+                        }
+                        syncAutoTrainingParticipants($conn, $id, $id_skill);
+
+                        redirectPage(
+                            'index.php?updated=1'
                         );
 
-                        exit;
+                    } else {
 
+                        $error =
+                            'Jadwal training gagal diperbarui: ' .
+                            $stmt->error;
+
+                        $stmt->close();
                     }
-
-
-                    $error =
-                        'Jadwal training gagal diperbarui: '
-                        . $stmt->error;
-
-                    $stmt->close();
-
                 }
-
-
             }
+
 
             /* =============================================
                INSERT
@@ -264,7 +927,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     (
                         nama_training,
                         id_skill,
-                        id_jabatan,
                         trainer,
                         tanggal_mulai,
                         tanggal_selesai,
@@ -281,7 +943,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ?,
                         ?,
                         ?,
-                        ?,
                         ?
                     )
                 ");
@@ -290,16 +951,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$stmt) {
 
                     $error =
-                        'Gagal menyiapkan query: '
-                        . $conn->error;
+                        'Gagal menyiapkan query tambah training: ' .
+                        $conn->error;
 
                 } else {
 
                     $stmt->bind_param(
-                        'siissssss',
+                        'sissssss',
                         $nama_training,
                         $id_skill,
-                        $id_jabatan,
                         $trainer,
                         $tanggal_mulai,
                         $tanggal_selesai,
@@ -311,40 +971,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     if ($stmt->execute()) {
 
+                        $newTrainingId = $stmt->insert_id;
                         $stmt->close();
+                        syncAutoTrainingParticipants($conn, $newTrainingId, $id_skill);
 
-                        header(
-                            'Location: index.php?saved=1'
+                        redirectPage(
+                            'index.php?saved=1'
                         );
 
-                        exit;
+                    } else {
 
+                        $error =
+                            'Jadwal training gagal dibuat: ' .
+                            $stmt->error;
+
+                        $stmt->close();
                     }
-
-
-                    $error =
-                        'Jadwal training gagal dibuat: '
-                        . $stmt->error;
-
-                    $stmt->close();
-
                 }
-
             }
-
         }
-
     }
 
 
     /* =====================================================
-       DELETE
+       TAMBAH PESERTA MANUAL
+    ===================================================== */
+    elseif ($action === 'add_participant') {
+        $trainingId=(int)($_POST['training_id']??0); $workerId=(int)($_POST['worker_id']??0);
+        if($trainingId<=0||$workerId<=0){$error='Training atau pekerja tidak valid.';}
+        else{
+            $stmt=$conn->prepare("INSERT INTO training_peserta (id_training,id_pekerja,sumber) VALUES (?,?,'manual') ON DUPLICATE KEY UPDATE id=id");
+            if(!$stmt){$error='Gagal menyiapkan tambah peserta: '.$conn->error;}
+            else{ $stmt->bind_param('ii',$trainingId,$workerId); if($stmt->execute()){ $stmt->close(); redirectPage('index.php?participant_saved=1&participant_training='.$trainingId); } $error='Peserta gagal ditambahkan: '.$stmt->error; $stmt->close(); }
+        }
+    }
+
+    /* =====================================================
+       HAPUS PESERTA
+    ===================================================== */
+    elseif ($action === 'remove_participant') {
+        $participantId=(int)($_POST['participant_id']??0); $trainingId=(int)($_POST['training_id']??0);
+        if($participantId<=0||$trainingId<=0){$error='Data peserta tidak valid.';}
+        else{
+            $stmt=$conn->prepare("DELETE FROM training_peserta WHERE id=? AND id_training=?");
+            if(!$stmt){$error='Gagal menyiapkan hapus peserta: '.$conn->error;}
+            else{ $stmt->bind_param('ii',$participantId,$trainingId); if($stmt->execute()){ $stmt->close(); redirectPage('index.php?participant_removed=1&participant_training='.$trainingId); } $error='Peserta gagal dihapus: '.$stmt->error; $stmt->close(); }
+        }
+    }
+
+    /* =====================================================
+       SINKRONISASI PESERTA OTOMATIS
+    ===================================================== */
+    elseif ($action === 'sync_participants') {
+        $trainingId=(int)($_POST['training_id']??0);
+        if($trainingId<=0){$error='ID training tidak valid.';}
+        else{
+            $stmt=$conn->prepare("SELECT id_skill FROM training WHERE id=? LIMIT 1");
+            if(!$stmt){$error='Gagal membaca training: '.$conn->error;}
+            else{
+                $stmt->bind_param('i',$trainingId); $stmt->execute(); $row=$stmt->get_result()->fetch_assoc(); $stmt->close();
+                if(!$row){$error='Training tidak ditemukan.';}
+                else{ syncAutoTrainingParticipants($conn,$trainingId,(int)$row['id_skill']); redirectPage('index.php?participant_synced=1&participant_training='.$trainingId); }
+            }
+        }
+    }
+
+    /* =====================================================
+       DELETE TRAINING
     ===================================================== */
 
     elseif ($action === 'delete') {
 
         $id =
-            (int) ($_POST['id'] ?? 0);
+            (int)($_POST['id'] ?? 0);
 
 
         if ($id <= 0) {
@@ -363,8 +1062,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$stmt) {
 
                 $error =
-                    'Gagal menyiapkan query hapus: '
-                    . $conn->error;
+                    'Gagal menyiapkan query hapus: ' .
+                    $conn->error;
 
             } else {
 
@@ -378,36 +1077,129 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     $stmt->close();
 
-                    header(
-                        'Location: index.php?deleted=1'
+                    /* Hapus peserta milik training yang ikut terhapus. */
+                    $stmtPeserta = $conn->prepare("DELETE FROM training_peserta WHERE id_training = ?");
+                    if ($stmtPeserta) {
+                        $stmtPeserta->bind_param('i', $id);
+                        $stmtPeserta->execute();
+                        $stmtPeserta->close();
+                    }
+
+                    redirectPage(
+                        'index.php?deleted=1'
                     );
 
-                    exit;
+                } else {
 
+                    $error =
+                        'Training gagal dihapus: ' .
+                        $stmt->error;
+
+                    $stmt->close();
                 }
-
-
-                $error =
-                    'Training gagal dihapus: '
-                    . $stmt->error;
-
-                $stmt->close();
-
             }
-
         }
-
     }
+}
 
+
+/* =========================================================
+   PESAN REDIRECT
+========================================================= */
+
+if (isset($_GET['saved'])) {
+
+    $success =
+        'Jadwal training berhasil dibuat.';
+}
+
+
+if (isset($_GET['updated'])) {
+
+    $success =
+        'Jadwal training berhasil diperbarui.';
+}
+
+
+if (isset($_GET['deleted'])) {
+
+    $success =
+        'Jadwal training berhasil dihapus.';
+}
+
+if (isset($_GET['participant_saved'])) $success = 'Peserta training berhasil ditambahkan.';
+if (isset($_GET['participant_removed'])) $success = 'Peserta training berhasil dihapus.';
+if (isset($_GET['participant_synced'])) $success = 'Peserta otomatis berhasil disinkronkan berdasarkan nilai < 2,5.';
+
+
+if (isset($_GET['skill_added'])) {
+
+    $success =
+        'Skill baru berhasil ditambahkan.';
+}
+
+
+if (isset($_GET['skill_updated'])) {
+
+    $success =
+        'Skill berhasil diperbarui.';
+}
+
+
+if (isset($_GET['skill_status'])) {
+
+    $success =
+        'Status skill berhasil diubah.';
+}
+
+
+if (isset($_GET['skill_deleted'])) {
+
+    $success =
+        'Skill berhasil dihapus.';
+}
+
+
+/* =========================================================
+   DATA SKILL
+========================================================= */
+
+$skills = [];
+
+
+/*
+ * Ambil semua skill supaya modal Kelola Skill
+ * juga bisa menampilkan skill Nonaktif.
+ */
+
+$qSkills = $conn->query("
+    SELECT
+        id,
+        nama_skill,
+        status
+    FROM skill
+    ORDER BY
+        CASE
+            WHEN status = 'Aktif'
+            THEN 1
+            ELSE 2
+        END,
+        nama_skill ASC
+");
+
+
+if ($qSkills) {
+
+    while ($row = $qSkills->fetch_assoc()) {
+
+        $skills[] = $row;
+    }
 }
 
 
 /* =========================================================
    FILTER
 ========================================================= */
-
-$filter_jabatan =
-    (int) ($_GET['jabatan'] ?? 0);
 
 $filter_status =
     trim($_GET['status'] ?? '');
@@ -438,7 +1230,6 @@ if ($keyword !== '') {
             OR COALESCE(t.lokasi, '') LIKE ?
             OR COALESCE(t.catatan, '') LIKE ?
             OR COALESCE(s.nama_skill, '') LIKE ?
-            OR COALESCE(j.nama_jabatan, '') LIKE ?
         )
     ";
 
@@ -455,42 +1246,13 @@ if ($keyword !== '') {
     $params[] = $like;
 
 
-    $types .=
-        'ssssss';
-
-}
-
-
-/* =========================================================
-   FILTER JABATAN
-========================================================= */
-
-if ($filter_jabatan > 0) {
-
-    $where[] =
-        't.id_jabatan = ?';
-
-    $params[] =
-        $filter_jabatan;
-
-    $types .=
-        'i';
-
+    $types .= 'sssss';
 }
 
 
 /* =========================================================
    FILTER STATUS
 ========================================================= */
-
-$valid_status = [
-    'Terjadwal',
-    'Berlangsung',
-    'Selesai',
-    'Terlambat',
-    'Dibatalkan'
-];
-
 
 if (
     in_array(
@@ -506,9 +1268,7 @@ if (
     $params[] =
         $filter_status;
 
-    $types .=
-        's';
-
+    $types .= 's';
 }
 
 
@@ -519,18 +1279,11 @@ if (
 $sql = "
     SELECT
         t.*,
-
         s.nama_skill,
-
-        j.nama_jabatan
-
+        s.status AS status_skill
     FROM training t
-
     LEFT JOIN skill s
         ON s.id = t.id_skill
-
-    LEFT JOIN jabatan j
-        ON j.id = t.id_jabatan
 ";
 
 
@@ -542,16 +1295,13 @@ if (!empty($where)) {
             ' AND ',
             $where
         );
-
 }
 
 
 $sql .= "
-
     ORDER BY
 
         CASE
-
             WHEN t.status = 'Berlangsung'
                 THEN 1
 
@@ -568,11 +1318,9 @@ $sql .= "
                 THEN 5
 
             ELSE 6
-
         END,
 
         t.tanggal_mulai ASC,
-
         t.id DESC
 ";
 
@@ -584,10 +1332,9 @@ $stmt =
 if (!$stmt) {
 
     die(
-        'Query training error: '
-        . e($conn->error)
+        'Query training error: ' .
+        e($conn->error)
     );
-
 }
 
 
@@ -597,23 +1344,40 @@ if (!empty($params)) {
         $types,
         ...$params
     );
-
 }
 
 
 if (!$stmt->execute()) {
 
     die(
-        'Gagal mengambil data training: '
-        . e($stmt->error)
+        'Gagal mengambil data training: ' .
+        e($stmt->error)
     );
-
 }
 
 
 $rows =
     $stmt->get_result();
 
+
+/* =========================================================
+   DATA TABEL KE ARRAY
+========================================================= */
+
+$training_rows = [];
+
+
+while ($row = $rows->fetch_assoc()) {
+
+    $training_rows[] = $row;
+}
+
+
+$stmt->close();
+
+$participantCounts = [];
+$qParticipantCounts = $conn->query("SELECT id_training, COUNT(*) AS jumlah FROM training_peserta GROUP BY id_training");
+if ($qParticipantCounts) { while ($pc = $qParticipantCounts->fetch_assoc()) $participantCounts[(int)$pc['id_training']] = (int)$pc['jumlah']; }
 
 /* =========================================================
    STATISTIK
@@ -663,33 +1427,50 @@ if ($qStat) {
 
 
     $total_training =
-        (int) ($stat['total'] ?? 0);
+        (int)($stat['total'] ?? 0);
 
     $terjadwal =
-        (int) ($stat['terjadwal'] ?? 0);
+        (int)($stat['terjadwal'] ?? 0);
 
     $berlangsung =
-        (int) ($stat['berlangsung'] ?? 0);
+        (int)($stat['berlangsung'] ?? 0);
 
     $selesai =
-        (int) ($stat['selesai'] ?? 0);
+        (int)($stat['selesai'] ?? 0);
 
     $terlambat =
-        (int) ($stat['terlambat'] ?? 0);
+        (int)($stat['terlambat'] ?? 0);
 
     $dibatalkan =
-        (int) ($stat['dibatalkan'] ?? 0);
-
+        (int)($stat['dibatalkan'] ?? 0);
 }
 
 
 /* =========================================================
-   FUNGSI STATUS
+   DATA SKILL AKTIF UNTUK DROPDOWN
+========================================================= */
+
+$active_skills = [];
+
+
+foreach ($skills as $skillRow) {
+
+    if (
+        ($skillRow['status'] ?? '') === 'Aktif'
+    ) {
+
+        $active_skills[] =
+            $skillRow;
+    }
+}
+
+
+/* =========================================================
+   FUNGSI STATUS TRAINING
 ========================================================= */
 
 function trainingStatusClass($status)
 {
-
     switch ($status) {
 
         case 'Terjadwal':
@@ -709,15 +1490,12 @@ function trainingStatusClass($status)
 
         default:
             return 'status-default';
-
     }
-
 }
 
 
 function trainingStatusIcon($status)
 {
-
     switch ($status) {
 
         case 'Terjadwal':
@@ -737,73 +1515,263 @@ function trainingStatusIcon($status)
 
         default:
             return 'bi-info-circle';
+    }
+}
 
+
+/* =========================================================
+   HEADER
+   DIPANGGIL SETELAH SEMUA POST SELESAI
+========================================================= */
+
+require __DIR__ . '/../partials/header.php';
+
+/* =========================================================
+   DETAIL TRAINING - SERVER SIDE
+========================================================= */
+if (isset($_GET['detail'])) {
+    $detailId = (int)$_GET['detail'];
+    $detail = null;
+    $detailParticipants = [];
+
+    if ($detailId > 0) {
+        $st = $conn->prepare("SELECT t.*, s.nama_skill FROM training t LEFT JOIN skill s ON s.id=t.id_skill WHERE t.id=? LIMIT 1");
+        if ($st) {
+            $st->bind_param('i', $detailId);
+            $st->execute();
+            $detail = $st->get_result()->fetch_assoc();
+            $st->close();
+        }
+
+        if ($detail) {
+            $stp = $conn->prepare("SELECT tp.id, tp.id_pekerja, COALESCE(tp.sumber,'manual') AS sumber, p.no_reg, p.nama, p.departemen, p.keterangan, ps.nilai, ps.tahun FROM training_peserta tp INNER JOIN pekerja p ON p.id=tp.id_pekerja LEFT JOIN penilaian_skill ps ON ps.id_pekerja=p.id AND ps.id_skill=? AND ps.tahun=(SELECT MAX(x.tahun) FROM penilaian_skill x WHERE x.id_skill=?) WHERE tp.id_training=? ORDER BY p.nama ASC");
+            if ($stp) {
+                $stp->bind_param('iii', $detail['id_skill'], $detail['id_skill'], $detailId);
+                $stp->execute();
+                $rr = $stp->get_result();
+                while ($x=$rr->fetch_assoc()) $detailParticipants[]=$x;
+                $stp->close();
+            }
+        }
     }
 
+    ?>
+    <style>
+        .detail-card{background:#fff;border:1px solid #e7ebf1;border-radius:17px;box-shadow:0 5px 20px rgba(20,43,76,.045);}
+        .detail-label{font-size:10px;text-transform:uppercase;letter-spacing:.05em;font-weight:700;color:#788396;margin-bottom:4px}
+        .detail-value{font-size:13px;color:#172033;font-weight:600}
+
+        /* =====================================================
+           PESERTA TRAINING - DETAIL
+        ===================================================== */
+        .participant-section-title{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:16px;
+            margin:4px 0 14px;
+            padding:0;
+        }
+        .participant-section-heading{
+            font-size:15px;
+            font-weight:800;
+            color:#092f63;
+            line-height:1.25;
+        }
+        .participant-section-heading span{
+            color:#788396;
+            font-weight:700;
+        }
+        .participant-section-subtitle{
+            font-size:10px;
+            color:#788396;
+            margin-top:4px;
+        }
+        .participant-rule-badge{
+            display:inline-flex;
+            align-items:center;
+            white-space:nowrap;
+            background:#eaf2ff;
+            color:#123f7a;
+            border:1px solid #dbe8fb;
+            border-radius:999px;
+            padding:6px 10px;
+            font-size:9px;
+            font-weight:700;
+        }
+        .department-group{
+            border:1px solid #e7ebf1;
+            border-radius:13px;
+            overflow:hidden;
+            margin-bottom:14px;
+            background:#fff;
+            box-shadow:0 3px 12px rgba(20,43,76,.04);
+        }
+        .department-group:last-child{margin-bottom:0}
+        .department-group-header{
+            background:#f8fafc;
+            border-bottom:1px solid #e7ebf1;
+            padding:11px 14px;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+        }
+        .department-group-left{
+            display:flex;
+            align-items:center;
+            min-width:0;
+            gap:10px;
+        }
+        .department-icon{
+            width:32px;
+            height:32px;
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            border-radius:9px;
+            background:#eaf2ff;
+            color:#123f7a;
+            font-size:13px;
+            flex:0 0 32px;
+        }
+        .department-group-title{
+            font-size:11px;
+            font-weight:800;
+            color:#172033;
+            line-height:1.25;
+        }
+        .department-group-meta{
+            font-size:8px;
+            color:#8a94a4;
+            margin-top:3px;
+        }
+        .department-group-count{
+            display:inline-flex;
+            align-items:center;
+            white-space:nowrap;
+            font-size:9px;
+            font-weight:800;
+            color:#123f7a;
+            background:#fff;
+            border:1px solid #dfe8f5;
+            border-radius:999px;
+            padding:5px 9px;
+        }
+        .department-group .table{
+            font-size:10px;
+            margin-bottom:0;
+        }
+        .department-group .table thead th{
+            background:#fff;
+            border-bottom:1px solid #e7ebf1;
+            color:#788396;
+            font-size:8px;
+            font-weight:800;
+            text-transform:uppercase;
+            letter-spacing:.04em;
+            white-space:nowrap;
+            padding:9px 12px;
+        }
+        .department-group .table tbody td{
+            padding:10px 12px;
+            border-color:#eef1f5;
+            color:#172033;
+            vertical-align:middle;
+        }
+        .department-group .table tbody tr:last-child td{
+            border-bottom:0;
+        }
+        .department-group .table tbody tr:hover{
+            background:#fafbfd;
+        }
+        @media (max-width:767.98px){
+            .participant-section-title{
+                align-items:flex-start;
+                flex-direction:column;
+            }
+            .participant-rule-badge{align-self:flex-start}
+            .department-group-header{padding:10px 11px}
+            .department-group .table thead th,
+            .department-group .table tbody td{padding:8px 9px}
+        }
+    </style>
+    <div class="container-fluid py-4">
+      <div class="detail-card p-4">
+        <div class="d-flex justify-content-between align-items-start mb-4">
+          <div><div class="small text-muted mb-1">DETAIL JADWAL TRAINING</div><h4 class="fw-bold mb-0"><?= $detail ? e($detail['nama_training']) : 'Training tidak ditemukan' ?></h4></div>
+          <a href="index.php" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left me-1"></i>Kembali</a>
+        </div>
+        <?php if (!$detail): ?>
+          <div class="alert alert-warning mb-0">Data training tidak ditemukan.</div>
+        <?php else: ?>
+          <div class="row g-3 mb-4">
+            <div class="col-md-4"><div class="detail-label">Skill / Kompetensi</div><div class="detail-value"><?= e($detail['nama_skill'] ?: '-') ?></div></div>
+              <div class="col-md-4"><div class="detail-label">Trainer</div><div class="detail-value"><?= e($detail['trainer'] ?: '-') ?></div></div>
+            <div class="col-md-3"><div class="detail-label">Tanggal Mulai</div><div class="detail-value"><?= e($detail['tanggal_mulai'] ?: '-') ?></div></div>
+            <div class="col-md-3"><div class="detail-label">Tanggal Selesai</div><div class="detail-value"><?= e($detail['tanggal_selesai'] ?: '-') ?></div></div>
+            <div class="col-md-3"><div class="detail-label">Lokasi</div><div class="detail-value"><?= e($detail['lokasi'] ?: '-') ?></div></div>
+            <div class="col-md-3"><div class="detail-label">Status</div><div class="detail-value"><?= e($detail['status'] ?: '-') ?></div></div>
+            <div class="col-12"><div class="detail-label">Catatan</div><div class="detail-value fw-normal"><?= nl2br(e($detail['catatan'] ?: '-')) ?></div></div>
+          </div>
+          <hr>
+          <div class="participant-section-title">
+            <div>
+              <div class="participant-section-heading">Peserta Training <span>(<?= count($detailParticipants) ?>)</span></div>
+              <div class="participant-section-subtitle">Daftar peserta berdasarkan departemen</div>
+            </div>
+            <span class="participant-rule-badge"><i class="bi bi-graph-down-arrow me-1"></i>Otomatis &lt; 2,5</span>
+          </div>
+          <?php
+          $detailByDept = [];
+          foreach ($detailParticipants as $dp) {
+              $dept = trim((string)($dp['departemen'] ?? ''));
+              if ($dept === '') $dept = 'Tanpa Departemen';
+              $detailByDept[$dept][] = $dp;
+          }
+          uksort($detailByDept, 'strnatcasecmp');
+          ?>
+          <?php if ($detailByDept): ?>
+              <?php foreach ($detailByDept as $deptName => $deptParticipants): ?>
+                  <div class="department-group">
+                      <div class="department-group-header">
+                          <div class="department-group-left">
+                              <span class="department-icon"><i class="bi bi-building"></i></span>
+                              <div>
+                                  <div class="department-group-title"><?= e($deptName) ?></div>
+                                  <div class="department-group-meta">Peserta training</div>
+                              </div>
+                          </div>
+                          <span class="department-group-count"><i class="bi bi-people me-1"></i><?= count($deptParticipants) ?> peserta</span>
+                      </div>
+                      <div class="table-responsive">
+                          <table class="table table-hover align-middle mb-0">
+                              <thead><tr><th>No</th><th>Pekerja</th><th>Keterangan</th><th>Nilai</th><th>Tahun</th><th>Sumber</th></tr></thead>
+                              <tbody>
+                              <?php foreach ($deptParticipants as $no => $dp): ?>
+                                  <tr>
+                                      <td><?= $no + 1 ?></td>
+                                      <td><b><?= e($dp['nama']) ?></b><div class="small text-muted">No. Reg: <?= e($dp['no_reg']) ?></div></td>
+                                      <td><?= e($dp['keterangan'] ?: '-') ?></td>
+                                      <td><?= $dp['nilai'] !== null ? number_format((float)$dp['nilai'],2,',','.') : '-' ?></td>
+                                      <td><?= e($dp['tahun'] ?: '-') ?></td>
+                                      <td><span class="badge <?= ($dp['sumber']==='otomatis')?'bg-success':'bg-primary' ?>"><?= ucfirst(e($dp['sumber'])) ?></span></td>
+                                  </tr>
+                              <?php endforeach; ?>
+                              </tbody>
+                          </table>
+                      </div>
+                  </div>
+              <?php endforeach; ?>
+          <?php else: ?>
+              <div class="text-center py-5 text-muted"><i class="bi bi-people fs-2 d-block mb-2"></i>Belum ada peserta training.</div>
+          <?php endif; ?>
+        <?php endif; ?>
+      </div>
+    </div>
+    <?php
+    exit;
 }
-
-
-/* =========================================================
-   FUNGSI JABATAN
-========================================================= */
-
-function isLeaderJabatan($nama)
-{
-
-    $nama =
-        strtolower(
-            (string) $nama
-        );
-
-
-    return
-        strpos(
-            $nama,
-            'leader'
-        ) !== false
-
-        ||
-
-        strpos(
-            $nama,
-            'supervisor'
-        ) !== false
-
-        ||
-
-        strpos(
-            $nama,
-            'koordinator'
-        ) !== false
-
-        ||
-
-        strpos(
-            $nama,
-            'kepala'
-        ) !== false;
-
-}
-
-
-/* =========================================================
-   DATA TABEL KE ARRAY
-=========================================================
-
-   Kita masukkan hasil query ke array supaya data edit
-   bisa dikirim dengan aman menggunakan data-* attribute.
-
-========================================================= */
-
-$training_rows = [];
-
-while ($row = $rows->fetch_assoc()) {
-
-    $training_rows[] = $row;
-
-}
-
-$stmt->close();
 
 ?>
 
@@ -815,16 +1783,15 @@ $stmt->close();
 
 .training-page-card {
 
-    background: #ffffff;
+    background:#ffffff;
 
-    border: 1px solid #e7ebf1;
+    border:1px solid #e7ebf1;
 
-    border-radius: 17px;
+    border-radius:17px;
 
     box-shadow:
         0 5px 20px
         rgba(20,43,76,.045);
-
 }
 
 
@@ -834,39 +1801,37 @@ $stmt->close();
 
 .training-stat {
 
-    padding: 20px;
+    padding:20px;
 
-    border-radius: 16px;
+    border-radius:16px;
 
-    background: #ffffff;
+    background:#ffffff;
 
-    border: 1px solid #e7ebf1;
+    border:1px solid #e7ebf1;
 
     box-shadow:
         0 5px 20px
         rgba(20,43,76,.035);
 
-    height: 100%;
-
+    height:100%;
 }
 
 
 .training-stat-icon {
 
-    width: 48px;
+    width:48px;
 
-    height: 48px;
+    height:48px;
 
-    border-radius: 13px;
+    border-radius:13px;
 
-    display: flex;
+    display:flex;
 
-    align-items: center;
+    align-items:center;
 
-    justify-content: center;
+    justify-content:center;
 
-    font-size: 20px;
-
+    font-size:20px;
 }
 
 
@@ -876,63 +1841,55 @@ $stmt->close();
 
 .training-table {
 
-    margin-bottom: 0;
-
+    margin-bottom:0;
 }
 
 
 .training-table th {
 
-    color: #7d8796;
+    color:#7d8796;
 
-    font-size: 10px;
+    font-size:10px;
 
-    font-weight: 700;
+    font-weight:700;
 
-    text-transform: uppercase;
+    text-transform:uppercase;
 
-    letter-spacing: .05em;
+    letter-spacing:.05em;
 
     border-bottom:
         1px solid #e3e8ef;
 
-    white-space: nowrap;
+    white-space:nowrap;
 
-    padding:
-        11px 8px;
-
+    padding:11px 8px;
 }
 
 
 .training-table td {
 
-    color: #384457;
+    color:#384457;
 
-    font-size: 11px;
+    font-size:11px;
 
-    vertical-align: middle;
+    vertical-align:middle;
 
     border-bottom:
         1px solid #edf0f4;
 
-    padding:
-        11px 8px;
-
+    padding:11px 8px;
 }
 
 
 .training-table tbody tr:last-child td {
 
-    border-bottom: 0;
-
+    border-bottom:0;
 }
 
 
 .training-table tbody tr:hover {
 
-    background:
-        #fafbfd;
-
+    background:#fafbfd;
 }
 
 
@@ -942,67 +1899,13 @@ $stmt->close();
 
 .training-name {
 
-    color: #16223a;
+    color:#16223a;
 
-    font-size: 11px;
+    font-size:11px;
 
-    font-weight: 700;
+    font-weight:700;
 
-    line-height: 1.45;
-
-}
-
-
-/* =========================================================
-   JABATAN
-========================================================= */
-
-.jabatan-badge {
-
-    display: inline-flex;
-
-    align-items: center;
-
-    gap: 5px;
-
-    padding: 5px 8px;
-
-    border-radius: 7px;
-
-    font-size: 9px;
-
-    font-weight: 700;
-
-    white-space: nowrap;
-
-    background:
-        #eaf2ff;
-
-    color:
-        #123f7a;
-
-}
-
-
-.jabatan-leader {
-
-    background:
-        #fff4d8;
-
-    color:
-        #9a6700;
-
-}
-
-
-.jabatan-pelaksana {
-
-    background:
-        #eaf2ff;
-
-    color:
-        #123f7a;
-
+    line-height:1.45;
 }
 
 
@@ -1012,88 +1915,69 @@ $stmt->close();
 
 .status-training {
 
-    display: inline-flex;
+    display:inline-flex;
 
-    align-items: center;
+    align-items:center;
 
-    gap: 5px;
+    gap:5px;
 
-    padding: 5px 8px;
+    padding:5px 8px;
 
-    border-radius: 7px;
+    border-radius:7px;
 
-    font-size: 9px;
+    font-size:9px;
 
-    font-weight: 700;
+    font-weight:700;
 
-    white-space: nowrap;
-
+    white-space:nowrap;
 }
 
 
 .status-terjadwal {
 
-    background:
-        #eaf2ff;
+    background:#eaf2ff;
 
-    color:
-        #123f7a;
-
+    color:#123f7a;
 }
 
 
 .status-berlangsung {
 
-    background:
-        #fff4d8;
+    background:#fff4d8;
 
-    color:
-        #9a6700;
-
+    color:#9a6700;
 }
 
 
 .status-selesai {
 
-    background:
-        #e9f8f0;
+    background:#e9f8f0;
 
-    color:
-        #198754;
-
+    color:#198754;
 }
 
 
 .status-terlambat {
 
-    background:
-        #ffecee;
+    background:#ffecee;
 
-    color:
-        #dc3545;
-
+    color:#dc3545;
 }
 
 
 .status-dibatalkan {
 
-    background:
-        #f0f1f3;
+    background:#f0f1f3;
 
-    color:
-        #6c757d;
-
+    color:#6c757d;
 }
 
 
 .status-default {
 
-    background:
-        #f0f1f3;
+    background:#f0f1f3;
 
-    color:
-        #6c757d;
-
+    color:#6c757d;
 }
 
 
@@ -1103,37 +1987,155 @@ $stmt->close();
 
 .training-filter {
 
-    background:
-        #f8fafc;
+    background:#f8fafc;
 
-    border:
-        1px solid #e7ebf1;
+    border:1px solid #e7ebf1;
 
-    border-radius:
-        12px;
+    border-radius:12px;
 
-    padding:
-        15px;
-
+    padding:15px;
 }
 
+
+/* =========================================================
+   SKILL MANAGER
+========================================================= */
+
+.skill-manager-table th {
+
+    color:#7d8796;
+
+    font-size:10px;
+
+    font-weight:700;
+
+    text-transform:uppercase;
+
+    letter-spacing:.05em;
+
+    white-space:nowrap;
+}
+
+
+.skill-manager-table td {
+
+    font-size:11px;
+
+    vertical-align:middle;
+}
+
+
+.skill-status {
+
+    display:inline-flex;
+
+    align-items:center;
+
+    gap:5px;
+
+    padding:5px 8px;
+
+    border-radius:7px;
+
+    font-size:9px;
+
+    font-weight:700;
+}
+
+
+.skill-status-active {
+
+    background:#e9f8f0;
+
+    color:#198754;
+}
+
+
+.skill-status-inactive {
+
+    background:#f0f1f3;
+
+    color:#6c757d;
+}
+
+
+/* =========================================================
+   SKILL SELECT WRAPPER
+========================================================= */
+
+.skill-select-wrapper {
+
+    position:relative;
+}
+
+
+.skill-select-actions {
+
+    display:flex;
+
+    gap:6px;
+
+    margin-top:7px;
+}
+
+
+.skill-help {
+
+    color:#8a94a4;
+
+    font-size:10px;
+
+    margin-top:5px;
+}
+
+
+/* =========================================================
+   NAMA TRAINING OTOMATIS
+========================================================= */
+
+.auto-training {
+
+    background:#f8fafc !important;
+
+    cursor:not-allowed;
+}
+
+
+ .participant-source{display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border-radius:7px;font-size:9px;font-weight:700;white-space:nowrap}.participant-source-auto{background:#eaf2ff;color:#123f7a}.participant-source-manual{background:#e9f8f0;color:#198754}.participant-value-low{color:#dc3545;font-weight:800}.participant-value-normal{color:#536174;font-weight:700}
+.participant-section-title{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px;padding:2px 0}
+.participant-section-heading{font-size:15px;font-weight:800;color:#092f63;line-height:1.25}
+.participant-section-heading span{color:#788396;font-weight:700}
+.participant-section-subtitle{font-size:10px;color:#788396;margin-top:3px}
+.participant-rule-badge{display:inline-flex;align-items:center;white-space:nowrap;background:#eaf2ff;color:#123f7a;border:1px solid #dbe8fb;border-radius:999px;padding:6px 10px;font-size:9px;font-weight:700}
+.department-group{border:1px solid #e7ebf1;border-radius:12px;overflow:hidden;margin-bottom:12px;background:#fff;box-shadow:0 2px 8px rgba(23,32,51,.035)}
+.department-group:last-child{margin-bottom:0}
+.department-group-header{background:#fff;border-bottom:1px solid #eef1f5;padding:11px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.department-group-left{display:flex;align-items:center;min-width:0;gap:9px}
+.department-icon{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;background:#eaf2ff;color:#123f7a;font-size:13px;flex:0 0 30px}
+.department-group-title{font-size:11px;font-weight:800;color:#172033;line-height:1.2}
+.department-group-meta{font-size:8px;color:#788396;margin-top:3px}
+.department-group-count{display:inline-flex;align-items:center;white-space:nowrap;font-size:9px;font-weight:700;color:#123f7a;background:#f5f8fd;border:1px solid #dfe8f5;border-radius:999px;padding:5px 9px}
+.department-group .table{font-size:10px}
+.department-group .table thead th{background:#fbfcfe;border-bottom:1px solid #e7ebf1;color:#788396;font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;padding:9px 12px}
+.department-group .table tbody td{padding:9px 12px;border-color:#eef1f5;color:#172033}
+.department-group .table tbody tr:last-child td{border-bottom:0}
+@media (max-width:767.98px){.participant-section-title{align-items:flex-start;flex-direction:column}.participant-rule-badge{align-self:flex-start}.department-group-header{padding:10px}.department-group .table thead th,.department-group .table tbody td{padding:8px 9px}}
 
 /* =========================================================
    RESPONSIVE
 ========================================================= */
 
-@media (max-width: 768px) {
+@media (max-width:768px) {
 
     .training-stat {
 
-        padding: 16px;
-
+        padding:16px;
     }
+
 
     .training-table {
 
-        min-width: 1050px;
-
+        min-width:1050px;
     }
 
 }
@@ -1248,8 +2250,11 @@ $stmt->close();
                             text-muted
                         "
                     >
+
                         Total Training
+
                     </div>
+
 
                     <div
                         class="
@@ -1257,9 +2262,11 @@ $stmt->close();
                             fw-bold
                         "
                     >
+
                         <?= number_format(
                             $total_training
                         ) ?>
+
                     </div>
 
                 </div>
@@ -1311,8 +2318,11 @@ $stmt->close();
                             text-muted
                         "
                     >
+
                         Terjadwal
+
                     </div>
+
 
                     <div
                         class="
@@ -1320,9 +2330,11 @@ $stmt->close();
                             fw-bold
                         "
                     >
+
                         <?= number_format(
                             $terjadwal
                         ) ?>
+
                     </div>
 
                 </div>
@@ -1374,8 +2386,11 @@ $stmt->close();
                             text-muted
                         "
                     >
+
                         Berlangsung
+
                     </div>
+
 
                     <div
                         class="
@@ -1383,9 +2398,11 @@ $stmt->close();
                             fw-bold
                         "
                     >
+
                         <?= number_format(
                             $berlangsung
                         ) ?>
+
                     </div>
 
                 </div>
@@ -1437,8 +2454,11 @@ $stmt->close();
                             text-muted
                         "
                     >
+
                         Selesai
+
                     </div>
+
 
                     <div
                         class="
@@ -1446,9 +2466,11 @@ $stmt->close();
                             fw-bold
                         "
                     >
+
                         <?= number_format(
                             $selesai
                         ) ?>
+
                     </div>
 
                 </div>
@@ -1514,8 +2536,7 @@ $stmt->close();
                 "
             >
 
-                Kelola jadwal training berdasarkan
-                kebutuhan kompetensi dan jabatan pekerja.
+                Kelola jadwal training berdasarkan kebutuhan kompetensi pekerja.
 
             </div>
 
@@ -1545,9 +2566,7 @@ $stmt->close();
     </div>
 
 
-    <!-- =====================================================
-         FILTER
-    ====================================================== -->
+    <!-- FILTER -->
 
     <div class="training-filter mt-4">
 
@@ -1606,68 +2625,7 @@ $stmt->close();
 
                 </div>
 
-            </div>
-
-
-            <!-- JABATAN -->
-
-            <div
-                class="
-                    col-xl-3
-                    col-lg-3
-                    col-md-6
-                "
-            >
-
-                <label class="form-label">
-
-                    Jabatan Target
-
-                </label>
-
-
-                <select
-                    name="jabatan"
-                    class="form-select"
-                >
-
-                    <option value="0">
-
-                        Semua Jabatan
-
-                    </option>
-
-
-                    <?php foreach (
-                        $jabatan
-                        as $j
-                    ): ?>
-
-                        <option
-                            value="<?= (int) $j['id'] ?>"
-                            <?= (
-                                $filter_jabatan
-                                === (int)$j['id']
-                            )
-                                ? 'selected'
-                                : ''
-                            ?>
-                        >
-
-                            <?= e(
-                                $j['nama_jabatan']
-                            ) ?>
-
-                        </option>
-
-                    <?php endforeach; ?>
-
-                </select>
-
-            </div>
-
-
-            <!-- STATUS -->
+            </div><!-- STATUS -->
 
             <div
                 class="
@@ -1697,8 +2655,7 @@ $stmt->close();
 
 
                     <?php foreach (
-                        $valid_status
-                        as $st
+                        $valid_status as $st
                     ): ?>
 
                         <option
@@ -1891,10 +2848,6 @@ $stmt->close();
                     </th>
 
                     <th>
-                        Jabatan Target
-                    </th>
-
-                    <th>
                         Skill
                     </th>
 
@@ -1925,7 +2878,6 @@ $stmt->close();
 
             <tbody>
 
-
             <?php if (
                 !empty($training_rows)
             ): ?>
@@ -1936,31 +2888,9 @@ $stmt->close();
                 $no = 1;
 
                 foreach (
-                    $training_rows
-                    as $r
+                    $training_rows as $r
                 ):
-
-                    $jabatanNama =
-                        !empty(
-                            $r['nama_jabatan']
-                        )
-                            ? $r['nama_jabatan']
-                            : 'Semua Jabatan';
-
-
-                    $isLeader =
-                        isLeaderJabatan(
-                            $jabatanNama
-                        );
-
-
-                    $jabatanClass =
-                        $isLeader
-                            ? 'jabatan-leader'
-                            : 'jabatan-pelaksana';
-
-
-                    $statusClass =
+$statusClass =
                         trainingStatusClass(
                             $r['status']
                         );
@@ -1972,15 +2902,8 @@ $stmt->close();
                         );
 
 
-                    /*
-                     * Data untuk tombol EDIT.
-                     *
-                     * Data disimpan dalam data-* attribute.
-                     * Ini menghindari masalah syntax/quote pada
-                     * onclick json_encode.
-                     */
-
                     $editData = [
+
                         'id' =>
                             (int)$r['id'],
 
@@ -1988,10 +2911,9 @@ $stmt->close();
                             $r['nama_training'] ?? '',
 
                         'id_skill' =>
-                            (int)($r['id_skill'] ?? 0),
-
-                        'id_jabatan' =>
-                            (int)($r['id_jabatan'] ?? 0),
+                            (int)(
+                                $r['id_skill'] ?? 0
+                            ),
 
                         'trainer' =>
                             $r['trainer'] ?? '',
@@ -2006,7 +2928,8 @@ $stmt->close();
                             $r['lokasi'] ?? '',
 
                         'status' =>
-                            $r['status'] ?? 'Terjadwal',
+                            $r['status'] ??
+                            'Terjadwal',
 
                         'catatan' =>
                             $r['catatan'] ?? ''
@@ -2051,6 +2974,8 @@ $stmt->close();
                             </div>
 
 
+                            <div class="small mt-1" style="color:#6f7b8d;font-size:9px;"><i class="bi bi-people me-1"></i><?= number_format($participantCounts[(int)$r['id']] ?? 0) ?> peserta</div>
+
                             <?php if (
                                 !empty(
                                     $r['catatan']
@@ -2078,42 +3003,7 @@ $stmt->close();
 
                             <?php endif; ?>
 
-                        </td>
-
-
-                        <!-- JABATAN -->
-
-                        <td>
-
-                            <span
-                                class="
-                                    jabatan-badge
-                                    <?= e(
-                                        $jabatanClass
-                                    ) ?>
-                                "
-                            >
-
-                                <i
-                                    class="
-                                        bi
-                                        <?= $isLeader
-                                            ? 'bi-person-badge-fill'
-                                            : 'bi-person-fill'
-                                        ?>
-                                    "
-                                ></i>
-
-                                <?= e(
-                                    $jabatanNama
-                                ) ?>
-
-                            </span>
-
-                        </td>
-
-
-                        <!-- SKILL -->
+                        </td><!-- SKILL -->
 
                         <td>
 
@@ -2295,6 +3185,17 @@ $stmt->close();
                             >
 
 
+                                <!-- DETAIL -->
+
+                                <a
+                                    href="index.php?detail=<?= (int)$r['id'] ?>"
+                                    class="btn btn-sm btn-outline-secondary"
+                                    title="Lihat Detail"
+                                >
+                                    <i class="bi bi-eye"></i>
+                                </a>
+
+
                                 <!-- EDIT -->
 
                                 <button
@@ -2310,7 +3211,9 @@ $stmt->close();
                                     data-training="<?= e(
                                         $editJson
                                     ) ?>"
-                                    onclick="prepareEditFromButton(this)"
+                                    onclick="
+                                        prepareEditFromButton(this)
+                                    "
                                 >
 
                                     <i
@@ -2329,9 +3232,7 @@ $stmt->close();
                                     method="post"
                                     class="d-inline"
                                     onsubmit="
-                                        return confirmDelete(
-                                            this
-                                        );
+                                        return confirmDelete(this);
                                     "
                                 >
 
@@ -2388,7 +3289,7 @@ $stmt->close();
                 <tr>
 
                     <td
-                        colspan="9"
+                        colspan="8"
                         class="
                             text-center
                             py-5
@@ -2438,7 +3339,6 @@ $stmt->close();
 
             <?php endif; ?>
 
-
             </tbody>
 
         </table>
@@ -2449,7 +3349,7 @@ $stmt->close();
 
 
 <!-- =======================================================
-     MODAL TAMBAH / EDIT
+     MODAL TAMBAH / EDIT TRAINING
 ======================================================= -->
 
 <div
@@ -2480,16 +3380,12 @@ $stmt->close();
         >
 
 
-            <!-- ACTION -->
-
             <input
                 type="hidden"
                 name="action"
                 value="save"
             >
 
-
-            <!-- ID -->
 
             <input
                 type="hidden"
@@ -2525,8 +3421,7 @@ $stmt->close();
                         "
                     >
 
-                        Tentukan training berdasarkan
-                        jabatan dan kompetensi.
+                        Tentukan training berdasarkan kompetensi.
 
                     </div>
 
@@ -2574,68 +3469,24 @@ $stmt->close();
                             required
                             maxlength="255"
                             placeholder="
-                                Contoh:
-                                Basic Electrical
+                                Pilih skill terlebih dahulu
                             "
                         >
 
-                    </div>
 
-
-                    <!-- JABATAN -->
-
-                    <div class="col-md-5">
-
-                        <label class="form-label">
-
-                            Jabatan Target
-
-                            <span
-                                class="text-danger"
-                            >
-                                *
-                            </span>
-
-                        </label>
-
-
-                        <select
-                            name="id_jabatan"
-                            id="form_jabatan"
-                            class="form-select"
-                            required
+                        <div
+                            id="trainingNameHelp"
+                            class="
+                                skill-help
+                            "
                         >
 
-                            <option value="">
+                            Nama training akan otomatis
+                            mengikuti skill yang dipilih.
 
-                                -- Pilih Jabatan --
+                        </div>
 
-                            </option>
-
-
-                            <?php foreach (
-                                $jabatan
-                                as $j
-                            ): ?>
-
-                                <option
-                                    value="<?= (int)$j['id'] ?>"
-                                >
-
-                                    <?= e(
-                                        $j['nama_jabatan']
-                                    ) ?>
-
-                                </option>
-
-                            <?php endforeach; ?>
-
-                        </select>
-
-                    </div>
-
-
-                    <!-- SKILL -->
+                    </div><!-- SKILL -->
 
                     <div class="col-md-6">
 
@@ -2646,37 +3497,113 @@ $stmt->close();
                         </label>
 
 
-                        <select
-                            name="id_skill"
-                            id="form_skill"
-                            class="form-select"
+                        <div
+                            class="
+                                skill-select-wrapper
+                            "
                         >
 
-                            <option value="0">
+                            <select
+                                name="id_skill"
+                                id="form_skill"
+                                class="form-select"
+                            >
 
-                                Umum
+                                <option value="0">
 
-                            </option>
-
-
-                            <?php foreach (
-                                $skills
-                                as $s
-                            ): ?>
-
-                                <option
-                                    value="<?= (int)$s['id'] ?>"
-                                >
-
-                                    <?= e(
-                                        $s['nama_skill']
-                                    ) ?>
+                                    Umum / Tanpa Skill
 
                                 </option>
 
-                            <?php endforeach; ?>
 
-                        </select>
+                                <?php foreach (
+                                    $active_skills as $s
+                                ): ?>
+
+                                    <option
+                                        value="<?= (int)$s['id'] ?>"
+                                    >
+
+                                        <?= e(
+                                            $s['nama_skill']
+                                        ) ?>
+
+                                    </option>
+
+                                <?php endforeach; ?>
+
+                            </select>
+
+
+                            <div
+                                class="
+                                    skill-select-actions
+                                "
+                            >
+
+                                <button
+                                    type="button"
+                                    class="
+                                        btn
+                                        btn-sm
+                                        btn-outline-primary
+                                    "
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#modalSkillManager"
+                                    onclick="openSkillManager()"
+                                >
+
+                                    <i
+                                        class="
+                                            bi
+                                            bi-gear
+                                            me-1
+                                        "
+                                    ></i>
+
+                                    Kelola Skill
+
+                                </button>
+
+
+                                <button
+                                    type="button"
+                                    class="
+                                        btn
+                                        btn-sm
+                                        btn-outline-success
+                                    "
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#modalAddSkill"
+                                >
+
+                                    <i
+                                        class="
+                                            bi
+                                            bi-plus-lg
+                                            me-1
+                                        "
+                                    ></i>
+
+                                    Skill Baru
+
+                                </button>
+
+                            </div>
+
+
+                            <div
+                                class="
+                                    skill-help
+                                "
+                            >
+
+                                Pilih skill yang sudah terdaftar.
+                                Nama training akan otomatis mengikuti skill.
+
+                            </div>
+
+                        </div>
 
                     </div>
 
@@ -2766,8 +3693,7 @@ $stmt->close();
                         >
 
                             <?php foreach (
-                                $valid_status
-                                as $st
+                                $valid_status as $st
                             ): ?>
 
                                 <option
@@ -2890,124 +3816,1294 @@ $stmt->close();
 
 
 <!-- =======================================================
+     MODAL PESERTA TRAINING
+======================================================= -->
+<div class="modal fade" id="modalPesertaTraining" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header">
+                <div><h5 class="modal-title fw-bold" id="participantModalTitle">Peserta Training</h5><div class="small text-muted" id="participantModalSubtitle">Kelola peserta training.</div></div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="participantLoading" class="text-center py-5 text-muted" style="display:none;"><div class="spinner-border spinner-border-sm me-2"></div>Memuat peserta...</div>
+                <div id="participantContent" style="display:none;">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+                        <div><div class="fw-semibold" style="color:#172033;font-size:13px;">Daftar Peserta</div><div class="small text-muted" id="participantRuleText">Peserta otomatis berasal dari nilai &lt; 2,5.</div></div>
+                        <form method="post" class="d-inline"><input type="hidden" name="action" value="sync_participants"><input type="hidden" name="training_id" id="sync_training_id" value="0"><button type="submit" class="btn btn-sm btn-outline-primary"><i class="bi bi-arrow-repeat me-1"></i>Sinkronkan Otomatis</button></form>
+                    </div>
+                    <div class="mb-4" id="participantTableBody"></div>
+                    <div class="training-filter">
+                        <div class="fw-semibold mb-1" style="color:#172033;font-size:13px;">Tambah Peserta Manual</div>
+                        <div class="small text-muted mb-3">Kamu tetap bisa menambahkan pekerja walaupun nilainya tidak di bawah 2,5.</div>
+                        <form method="post" class="row g-2 align-items-end"><input type="hidden" name="action" value="add_participant"><input type="hidden" name="training_id" id="add_training_id" value="0"><div class="col-lg-9"><label class="form-label">Pekerja</label><select name="worker_id" id="participantWorkerSelect" class="form-select" required><option value="">-- Pilih Pekerja --</option></select></div><div class="col-lg-3"><button type="submit" class="btn btn-primary w-100"><i class="bi bi-plus-lg me-1"></i>Tambah Peserta</button></div></form>
+                    </div>
+                </div>
+                <div id="participantError" class="alert alert-danger border-0 shadow-sm" style="display:none;"></div>
+            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-light border" data-bs-dismiss="modal">Tutup</button></div>
+        </div>
+    </div>
+</div>
+
+<!-- =======================================================
+     MODAL TAMBAH SKILL
+======================================================= -->
+
+<div
+    class="
+        modal
+        fade
+    "
+    id="modalAddSkill"
+    tabindex="-1"
+    aria-hidden="true"
+>
+
+    <div
+        class="
+            modal-dialog
+            modal-dialog-centered
+        "
+    >
+
+        <form
+            method="post"
+            class="
+                modal-content
+                border-0
+                shadow-lg
+            "
+        >
+
+            <input
+                type="hidden"
+                name="action"
+                value="add_skill"
+            >
+
+
+            <input
+                type="hidden"
+                name="status_skill"
+                value="Aktif"
+            >
+
+
+            <div class="modal-header">
+
+                <div>
+
+                    <h5
+                        class="
+                            modal-title
+                            fw-bold
+                        "
+                    >
+
+                        Tambah Skill Baru
+
+                    </h5>
+
+
+                    <div
+                        class="
+                            small
+                            text-muted
+                        "
+                    >
+
+                        Skill baru akan langsung tersedia
+                        untuk Jadwal Training.
+
+                    </div>
+
+                </div>
+
+
+                <button
+                    type="button"
+                    class="btn-close"
+                    data-bs-dismiss="modal"
+                ></button>
+
+            </div>
+
+
+            <div class="modal-body">
+
+                <label class="form-label">
+
+                    Nama Skill
+
+                    <span class="text-danger">
+                        *
+                    </span>
+
+                </label>
+
+
+                <input
+                    type="text"
+                    name="nama_skill"
+                    class="form-control"
+                    required
+                    maxlength="255"
+                    placeholder="
+                        Contoh: Basic Electrical
+                    "
+                >
+
+
+                <div
+                    class="
+                        skill-help
+                    "
+                >
+
+                    Contoh: PLC, Basic Electrical,
+                    Hydraulic, Pneumatic, Welding, dll.
+
+                </div>
+
+            </div>
+
+
+            <div class="modal-footer">
+
+                <button
+                    type="button"
+                    class="
+                        btn
+                        btn-light
+                        border
+                    "
+                    data-bs-dismiss="modal"
+                >
+
+                    Batal
+
+                </button>
+
+
+                <button
+                    type="submit"
+                    class="
+                        btn
+                        btn-primary
+                    "
+                >
+
+                    <i
+                        class="
+                            bi
+                            bi-plus-lg
+                            me-1
+                        "
+                    ></i>
+
+                    Tambah Skill
+
+                </button>
+
+            </div>
+
+        </form>
+
+    </div>
+
+</div>
+
+
+<!-- =======================================================
+     MODAL KELOLA SKILL
+======================================================= -->
+
+<div
+    class="
+        modal
+        fade
+    "
+    id="modalSkillManager"
+    tabindex="-1"
+    aria-hidden="true"
+>
+
+    <div
+        class="
+            modal-dialog
+            modal-lg
+            modal-dialog-centered
+        "
+    >
+
+        <div
+            class="
+                modal-content
+                border-0
+                shadow-lg
+            "
+        >
+
+
+            <!-- HEADER -->
+
+            <div class="modal-header">
+
+                <div>
+
+                    <h5
+                        class="
+                            modal-title
+                            fw-bold
+                        "
+                    >
+
+                        Kelola Skill / Kompetensi
+
+                    </h5>
+
+
+                    <div
+                        class="
+                            small
+                            text-muted
+                        "
+                    >
+
+                        Tambah, edit, aktifkan, nonaktifkan,
+                        atau hapus skill.
+
+                    </div>
+
+                </div>
+
+
+                <button
+                    type="button"
+                    class="btn-close"
+                    data-bs-dismiss="modal"
+                ></button>
+
+            </div>
+
+
+            <!-- BODY -->
+
+            <div class="modal-body">
+
+
+                <div
+                    class="
+                        d-flex
+                        justify-content-between
+                        align-items-center
+                        mb-3
+                        gap-2
+                        flex-wrap
+                    "
+                >
+
+                    <div>
+
+                        <div
+                            class="
+                                fw-semibold
+                            "
+                            style="
+                                color:#172033;
+                                font-size:13px;
+                            "
+                        >
+
+                            Daftar Skill
+
+                        </div>
+
+
+                        <div
+                            class="
+                                small
+                                text-muted
+                            "
+                        >
+
+                            Skill aktif akan muncul
+                            di form Jadwal Training.
+
+                        </div>
+
+                    </div>
+
+
+                    <button
+                        type="button"
+                        class="
+                            btn
+                            btn-sm
+                            btn-primary
+                        "
+                        data-bs-toggle="modal"
+                        data-bs-target="#modalAddSkill"
+                        onclick="
+                            closeSkillManagerBeforeAdd();
+                        "
+                    >
+
+                        <i
+                            class="
+                                bi
+                                bi-plus-lg
+                                me-1
+                            "
+                        ></i>
+
+                        Tambah Skill
+
+                    </button>
+
+                </div>
+
+
+                <div class="table-responsive">
+
+                    <table
+                        class="
+                            table
+                            table-hover
+                            skill-manager-table
+                        "
+                    >
+
+                        <thead>
+
+                            <tr>
+
+                                <th width="45">
+                                    No
+                                </th>
+
+                                <th>
+                                    Nama Skill
+                                </th>
+
+                                <th>
+                                    Status
+                                </th>
+
+                                <th
+                                    width="180"
+                                    class="text-end"
+                                >
+                                    Aksi
+                                </th>
+
+                            </tr>
+
+                        </thead>
+
+
+                        <tbody>
+
+                        <?php if (
+                            !empty($skills)
+                        ): ?>
+
+
+                            <?php
+
+                            $skillNo = 1;
+
+                            foreach (
+                                $skills as $skillItem
+                            ):
+
+                                $skillIsActive =
+                                    (
+                                        $skillItem['status'] ===
+                                        'Aktif'
+                                    );
+
+                            ?>
+
+
+                                <tr>
+
+                                    <td>
+
+                                        <?= $skillNo++ ?>
+
+                                    </td>
+
+
+                                    <td>
+
+                                        <span
+                                            class="
+                                                fw-semibold
+                                            "
+                                            style="
+                                                color:#172033;
+                                            "
+                                        >
+
+                                            <?= e(
+                                                $skillItem[
+                                                    'nama_skill'
+                                                ]
+                                            ) ?>
+
+                                        </span>
+
+                                    </td>
+
+
+                                    <td>
+
+                                        <?php if (
+                                            $skillIsActive
+                                        ): ?>
+
+                                            <span
+                                                class="
+                                                    skill-status
+                                                    skill-status-active
+                                                "
+                                            >
+
+                                                <i
+                                                    class="
+                                                        bi
+                                                        bi-check-circle-fill
+                                                    "
+                                                ></i>
+
+                                                Aktif
+
+                                            </span>
+
+                                        <?php else: ?>
+
+                                            <span
+                                                class="
+                                                    skill-status
+                                                    skill-status-inactive
+                                                "
+                                            >
+
+                                                <i
+                                                    class="
+                                                        bi
+                                                        bi-dash-circle
+                                                    "
+                                                ></i>
+
+                                                Nonaktif
+
+                                            </span>
+
+                                        <?php endif; ?>
+
+                                    </td>
+
+
+                                    <td>
+
+                                        <div
+                                            class="
+                                                d-flex
+                                                justify-content-end
+                                                gap-1
+                                            "
+                                        >
+
+
+                                            <!-- EDIT -->
+
+                                            <button
+                                                type="button"
+                                                class="
+                                                    btn
+                                                    btn-sm
+                                                    btn-outline-primary
+                                                "
+                                                title="Edit Skill"
+                                                onclick='
+                                                    editSkill(
+                                                        <?= json_encode(
+                                                            $skillItem,
+                                                            JSON_HEX_TAG |
+                                                            JSON_HEX_APOS |
+                                                            JSON_HEX_QUOT |
+                                                            JSON_HEX_AMP
+                                                        ) ?>
+                                                    )
+                                                '
+                                            >
+
+                                                <i
+                                                    class="
+                                                        bi
+                                                        bi-pencil
+                                                    "
+                                                ></i>
+
+                                            </button>
+
+
+                                            <!-- TOGGLE -->
+
+                                            <form
+                                                method="post"
+                                                class="d-inline"
+                                            >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="action"
+                                                    value="toggle_skill"
+                                                >
+
+
+                                                <input
+                                                    type="hidden"
+                                                    name="skill_id"
+                                                    value="<?= (int)$skillItem['id'] ?>"
+                                                >
+
+
+                                                <button
+                                                    type="submit"
+                                                    class="
+                                                        btn
+                                                        btn-sm
+                                                        btn-outline-warning
+                                                    "
+                                                    title="<?= $skillIsActive
+                                                        ? 'Nonaktifkan'
+                                                        : 'Aktifkan'
+                                                    ?>"
+                                                >
+
+                                                    <i
+                                                        class="
+                                                            bi
+                                                            <?= $skillIsActive
+                                                                ? 'bi-toggle-on'
+                                                                : 'bi-toggle-off'
+                                                            ?>
+                                                        "
+                                                    ></i>
+
+                                                </button>
+
+                                            </form>
+
+
+                                            <!-- DELETE -->
+
+                                            <form
+                                                method="post"
+                                                class="d-inline"
+                                                onsubmit="
+                                                    return confirmSkillDelete(
+                                                        this
+                                                    );
+                                                "
+                                            >
+
+                                                <input
+                                                    type="hidden"
+                                                    name="action"
+                                                    value="delete_skill"
+                                                >
+
+
+                                                <input
+                                                    type="hidden"
+                                                    name="skill_id"
+                                                    value="<?= (int)$skillItem['id'] ?>"
+                                                >
+
+
+                                                <input
+                                                    type="hidden"
+                                                    name="skill_name"
+                                                    value="<?= e(
+                                                        $skillItem[
+                                                            'nama_skill'
+                                                        ]
+                                                    ) ?>"
+                                                >
+
+
+                                                <button
+                                                    type="submit"
+                                                    class="
+                                                        btn
+                                                        btn-sm
+                                                        btn-outline-danger
+                                                    "
+                                                    title="Hapus Skill"
+                                                >
+
+                                                    <i
+                                                        class="
+                                                            bi
+                                                            bi-trash
+                                                        "
+                                                    ></i>
+
+                                                </button>
+
+                                            </form>
+
+                                        </div>
+
+                                    </td>
+
+                                </tr>
+
+
+                            <?php endforeach; ?>
+
+
+                        <?php else: ?>
+
+
+                            <tr>
+
+                                <td
+                                    colspan="4"
+                                    class="
+                                        text-center
+                                        py-4
+                                        text-muted
+                                    "
+                                >
+
+                                    Belum ada skill.
+
+                                </td>
+
+                            </tr>
+
+
+                        <?php endif; ?>
+
+                        </tbody>
+
+                    </table>
+
+                </div>
+
+            </div>
+
+
+            <!-- FOOTER -->
+
+            <div class="modal-footer">
+
+                <button
+                    type="button"
+                    class="
+                        btn
+                        btn-light
+                        border
+                    "
+                    data-bs-dismiss="modal"
+                >
+
+                    Tutup
+
+                </button>
+
+            </div>
+
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<!-- =======================================================
+     MODAL EDIT SKILL
+======================================================= -->
+
+<div
+    class="
+        modal
+        fade
+    "
+    id="modalEditSkill"
+    tabindex="-1"
+    aria-hidden="true"
+>
+
+    <div
+        class="
+            modal-dialog
+            modal-dialog-centered
+        "
+    >
+
+        <form
+            method="post"
+            class="
+                modal-content
+                border-0
+                shadow-lg
+            "
+        >
+
+            <input
+                type="hidden"
+                name="action"
+                value="update_skill"
+            >
+
+
+            <input
+                type="hidden"
+                name="skill_id"
+                id="edit_skill_id"
+                value="0"
+            >
+
+
+            <div class="modal-header">
+
+                <div>
+
+                    <h5
+                        class="
+                            modal-title
+                            fw-bold
+                        "
+                    >
+
+                        Edit Skill
+
+                    </h5>
+
+
+                    <div
+                        class="
+                            small
+                            text-muted
+                        "
+                    >
+
+                        Perbarui nama dan status skill.
+
+                    </div>
+
+                </div>
+
+
+                <button
+                    type="button"
+                    class="btn-close"
+                    data-bs-dismiss="modal"
+                ></button>
+
+            </div>
+
+
+            <div class="modal-body">
+
+                <div class="mb-3">
+
+                    <label class="form-label">
+
+                        Nama Skill
+
+                    </label>
+
+
+                    <input
+                        type="text"
+                        name="nama_skill"
+                        id="edit_skill_name"
+                        class="form-control"
+                        required
+                        maxlength="255"
+                    >
+
+                </div>
+
+
+                <div>
+
+                    <label class="form-label">
+
+                        Status
+
+                    </label>
+
+
+                    <select
+                        name="status_skill"
+                        id="edit_skill_status"
+                        class="form-select"
+                    >
+
+                        <option value="Aktif">
+                            Aktif
+                        </option>
+
+                        <option value="Nonaktif">
+                            Nonaktif
+                        </option>
+
+                    </select>
+
+                </div>
+
+            </div>
+
+
+            <div class="modal-footer">
+
+                <button
+                    type="button"
+                    class="
+                        btn
+                        btn-light
+                        border
+                    "
+                    data-bs-dismiss="modal"
+                >
+
+                    Batal
+
+                </button>
+
+
+                <button
+                    type="submit"
+                    class="
+                        btn
+                        btn-primary
+                    "
+                >
+
+                    <i
+                        class="
+                            bi
+                            bi-save
+                            me-1
+                        "
+                    ></i>
+
+                    Simpan Perubahan
+
+                </button>
+
+            </div>
+
+        </form>
+
+    </div>
+
+</div>
+
+
+<!-- =======================================================
      JAVASCRIPT
 ======================================================= -->
 
 <script>
 
 /* =========================================================
-   TAMBAH DATA
+   DATA SKILL UNTUK JAVASCRIPT
 ========================================================= */
 
-function prepareAdd() {
+const skillData = <?= json_encode(
+    $active_skills,
+    JSON_UNESCAPED_UNICODE |
+    JSON_HEX_TAG |
+    JSON_HEX_APOS |
+    JSON_HEX_QUOT |
+    JSON_HEX_AMP
+) ?>;
 
-    const title =
-        document.getElementById(
-            'modalTitle'
-        );
 
-    const id =
-        document.getElementById(
-            'form_id'
-        );
+/* =========================================================
+   HELPER GET ELEMENT
+========================================================= */
 
-    const nama =
-        document.getElementById(
-            'form_nama'
-        );
+function el(id)
+{
+    return document.getElementById(id);
+}
 
-    const jabatan =
-        document.getElementById(
-            'form_jabatan'
-        );
 
-    const skill =
-        document.getElementById(
-            'form_skill'
-        );
+/* =========================================================
+   UPDATE NAMA TRAINING DARI SKILL
+========================================================= */
 
-    const trainer =
-        document.getElementById(
-            'form_trainer'
-        );
+function updateTrainingNameFromSkill(
+    force = true
+) {
 
-    const mulai =
-        document.getElementById(
-            'form_mulai'
-        );
+    const skillSelect =
+        el('form_skill');
 
-    const selesai =
-        document.getElementById(
-            'form_selesai'
-        );
+    const namaInput =
+        el('form_nama');
 
-    const lokasi =
-        document.getElementById(
-            'form_lokasi'
-        );
+    const help =
+        el('trainingNameHelp');
 
-    const status =
-        document.getElementById(
-            'form_status'
-        );
 
-    const catatan =
-        document.getElementById(
-            'form_catatan'
+    if (!skillSelect || !namaInput) {
+        return;
+    }
+
+
+    const selectedId =
+        parseInt(
+            skillSelect.value || '0',
+            10
         );
 
 
-    title.innerText =
-        'Tambah Jadwal Training';
+    if (selectedId > 0) {
+
+        const selectedSkill =
+            skillData.find(
+                function(skill) {
+
+                    return (
+                        parseInt(
+                            skill.id,
+                            10
+                        ) === selectedId
+                    );
+
+                }
+            );
 
 
-    id.value =
-        '0';
+        if (selectedSkill) {
+
+            /*
+             * Nama training otomatis mengikuti skill
+             */
+
+            namaInput.value =
+                selectedSkill.nama_skill;
 
 
-    nama.value =
-        '';
+            namaInput.classList.add(
+                'auto-training'
+            );
 
 
-    jabatan.value =
-        '';
+            /*
+             * Tidak boleh diedit manual
+             * selama menggunakan skill
+             */
+
+            namaInput.readOnly = true;
 
 
-    skill.value =
-        '0';
+            if (help) {
+
+                help.innerHTML =
+                    '<i class="bi bi-check-circle-fill me-1"></i>' +
+                    'Nama training otomatis mengikuti skill "' +
+                    escapeHtml(
+                        selectedSkill.nama_skill
+                    ) +
+                    '".';
+
+                help.style.color =
+                    '#198754';
+            }
+
+        }
+
+    } else {
+
+        /*
+         * Umum / tanpa skill
+         */
+
+        namaInput.readOnly = false;
+
+        namaInput.classList.remove(
+            'auto-training'
+        );
 
 
-    trainer.value =
-        '';
+        if (help) {
 
+            help.innerHTML =
+                'Tanpa skill, nama training dapat diisi manual.';
 
-    mulai.value =
-        '';
+            help.style.color =
+                '#8a94a4';
+        }
 
-
-    selesai.value =
-        '';
-
-
-    lokasi.value =
-        '';
-
-
-    status.value =
-        'Terjadwal';
-
-
-    catatan.value =
-        '';
+    }
 
 }
 
 
 /* =========================================================
-   EDIT DATA
+   ESCAPE HTML JAVASCRIPT
 ========================================================= */
 
-function prepareEditFromButton(button) {
+function escapeHtml(value)
+{
+
+    return String(value)
+        .replace(
+            /&/g,
+            '&amp;'
+        )
+        .replace(
+            /</g,
+            '&lt;'
+        )
+        .replace(
+            />/g,
+            '&gt;'
+        )
+        .replace(
+            /"/g,
+            '&quot;'
+        )
+        .replace(
+            /'/g,
+            '&#039;'
+        );
+}
+
+
+/* =========================================================
+   EVENT SKILL CHANGE
+========================================================= */
+
+document.addEventListener(
+    'DOMContentLoaded',
+    function()
+    {
+
+        const skillSelect =
+            el('form_skill');
+
+
+        if (skillSelect) {
+
+            skillSelect.addEventListener(
+                'change',
+                function()
+                {
+
+                    updateTrainingNameFromSkill(
+                        true
+                    );
+
+                }
+            );
+
+        }
+
+
+        /*
+         * Jika skill baru saja ditambahkan
+         * melalui redirect ?skill_added=ID
+         */
+
+        const urlParams =
+            new URLSearchParams(
+                window.location.search
+            );
+
+
+        const addedSkillId =
+            parseInt(
+                urlParams.get(
+                    'skill_added'
+                ) || '0',
+                10
+            );
+
+
+        if (addedSkillId > 0) {
+
+            /*
+             * Buka modal training otomatis
+             */
+
+            const trainingModal =
+                document.getElementById(
+                    'modalTraining'
+                );
+
+
+            if (
+                trainingModal &&
+                typeof bootstrap !== 'undefined'
+            ) {
+
+                const modal =
+                    new bootstrap.Modal(
+                        trainingModal
+                    );
+
+
+                modal.show();
+
+
+                setTimeout(
+                    function()
+                    {
+
+                        const skillSelect =
+                            el('form_skill');
+
+
+                        if (skillSelect) {
+
+                            skillSelect.value =
+                                String(
+                                    addedSkillId
+                                );
+
+
+                            updateTrainingNameFromSkill(
+                                true
+                            );
+                        }
+
+                    },
+                    300
+                );
+
+            }
+
+        }
+
+    }
+);
+
+
+/* =========================================================
+   PREPARE ADD
+========================================================= */
+
+function prepareAdd()
+{
+
+    if (el('modalTitle')) {
+
+        el('modalTitle').innerText =
+            'Tambah Jadwal Training';
+
+    }
+
+
+    if (el('form_id')) {
+
+        el('form_id').value =
+            '0';
+
+    }
+
+
+    if (el('form_nama')) {
+
+        el('form_nama').value =
+            '';
+
+        el('form_nama').readOnly =
+            false;
+
+        el('form_nama').classList.remove(
+            'auto-training'
+        );
+
+    }
+if (el('form_skill')) {
+
+        el('form_skill').value =
+            '0';
+
+    }
+
+
+    if (el('form_trainer')) {
+
+        el('form_trainer').value =
+            '';
+
+    }
+
+
+    if (el('form_mulai')) {
+
+        el('form_mulai').value =
+            '';
+
+    }
+
+
+    if (el('form_selesai')) {
+
+        el('form_selesai').value =
+            '';
+
+    }
+
+
+    if (el('form_status')) {
+
+        el('form_status').value =
+            'Terjadwal';
+
+    }
+
+
+    if (el('form_lokasi')) {
+
+        el('form_lokasi').value =
+            '';
+
+    }
+
+
+    if (el('form_catatan')) {
+
+        el('form_catatan').value =
+            '';
+
+    }
+
+
+    if (el('trainingNameHelp')) {
+
+        el('trainingNameHelp').innerHTML =
+            'Nama training akan otomatis mengikuti skill yang dipilih.';
+
+        el('trainingNameHelp').style.color =
+            '#8a94a4';
+    }
+
+}
+
+
+/* =========================================================
+   PREPARE EDIT
+========================================================= */
+
+function prepareEditFromButton(button)
+{
 
     const raw =
         button.getAttribute(
@@ -3017,12 +5113,11 @@ function prepareEditFromButton(button) {
 
     if (!raw) {
 
-        console.error(
+        alert(
             'Data training tidak ditemukan.'
         );
 
         return;
-
     }
 
 
@@ -3041,94 +5136,350 @@ function prepareEditFromButton(button) {
             error
         );
 
+
         alert(
             'Data training tidak dapat dibaca.'
         );
 
         return;
+    }
+
+
+    if (el('modalTitle')) {
+
+        el('modalTitle').innerText =
+            'Edit Jadwal Training';
 
     }
 
 
-    document.getElementById(
-        'modalTitle'
-    ).innerText =
-        'Edit Jadwal Training';
+    if (el('form_id')) {
+
+        el('form_id').value =
+            data.id || 0;
+
+    }
 
 
-    document.getElementById(
-        'form_id'
-    ).value =
-        data.id || 0;
+    if (el('form_nama')) {
+
+        el('form_nama').value =
+            data.nama_training || '';
+
+    }
+if (el('form_skill')) {
+
+        el('form_skill').value =
+            data.id_skill || 0;
+
+    }
 
 
-    document.getElementById(
-        'form_nama'
-    ).value =
-        data.nama_training || '';
+    if (el('form_trainer')) {
+
+        el('form_trainer').value =
+            data.trainer || '';
+
+    }
 
 
-    document.getElementById(
-        'form_jabatan'
-    ).value =
-        data.id_jabatan || '';
+    if (el('form_mulai')) {
+
+        el('form_mulai').value =
+            data.tanggal_mulai || '';
+
+    }
 
 
-    document.getElementById(
-        'form_skill'
-    ).value =
-        data.id_skill || 0;
+    if (el('form_selesai')) {
+
+        el('form_selesai').value =
+            data.tanggal_selesai || '';
+
+    }
 
 
-    document.getElementById(
-        'form_trainer'
-    ).value =
-        data.trainer || '';
+    if (el('form_lokasi')) {
+
+        el('form_lokasi').value =
+            data.lokasi || '';
+
+    }
 
 
-    document.getElementById(
-        'form_mulai'
-    ).value =
-        data.tanggal_mulai || '';
+    if (el('form_status')) {
+
+        el('form_status').value =
+            data.status ||
+            'Terjadwal';
+
+    }
 
 
-    document.getElementById(
-        'form_selesai'
-    ).value =
-        data.tanggal_selesai || '';
+    if (el('form_catatan')) {
+
+        el('form_catatan').value =
+            data.catatan || '';
+
+    }
 
 
-    document.getElementById(
-        'form_lokasi'
-    ).value =
-        data.lokasi || '';
+    /*
+     * Jika training punya skill aktif,
+     * nama otomatis mengikuti skill.
+     */
 
-
-    document.getElementById(
-        'form_status'
-    ).value =
-        data.status || 'Terjadwal';
-
-
-    document.getElementById(
-        'form_catatan'
-    ).value =
-        data.catatan || '';
+    updateTrainingNameFromSkill(
+        true
+    );
 
 }
 
 
 /* =========================================================
-   DELETE
+   OPEN SKILL MANAGER
 ========================================================= */
 
-function confirmDelete(form) {
+function openSkillManager()
+{
 
-    const id =
-        form.querySelector(
-            'input[name="id"]'
+    /*
+     * Tidak perlu melakukan apa-apa.
+     * Fungsi disediakan agar modal tetap stabil.
+     */
+
+}
+
+
+/* =========================================================
+   TUTUP MANAGER SEBELUM BUKA TAMBAH SKILL
+========================================================= */
+
+function closeSkillManagerBeforeAdd()
+{
+
+    const manager =
+        document.getElementById(
+            'modalSkillManager'
         );
 
+
+    if (
+        manager &&
+        typeof bootstrap !== 'undefined'
+    ) {
+
+        const modal =
+            bootstrap.Modal.getInstance(
+                manager
+            );
+
+
+        if (modal) {
+
+            modal.hide();
+
+        }
+
+    }
+
+}
+
+
+/* =========================================================
+   EDIT SKILL
+========================================================= */
+
+function editSkill(skill)
+{
+
+    if (!skill) {
+        return;
+    }
+
+
+    if (el('edit_skill_id')) {
+
+        el('edit_skill_id').value =
+            skill.id || 0;
+
+    }
+
+
+    if (el('edit_skill_name')) {
+
+        el('edit_skill_name').value =
+            skill.nama_skill || '';
+
+    }
+
+
+    if (el('edit_skill_status')) {
+
+        el('edit_skill_status').value =
+            skill.status || 'Aktif';
+
+    }
+
+
+    /*
+     * Tutup manager
+     */
+
+    const manager =
+        document.getElementById(
+            'modalSkillManager'
+        );
+
+
+    if (
+        manager &&
+        typeof bootstrap !== 'undefined'
+    ) {
+
+        const managerInstance =
+            bootstrap.Modal.getInstance(
+                manager
+            );
+
+
+        if (managerInstance) {
+
+            managerInstance.hide();
+
+        }
+
+    }
+
+
+    /*
+     * Buka modal edit
+     */
+
+    setTimeout(
+        function()
+        {
+
+            const editModal =
+                document.getElementById(
+                    'modalEditSkill'
+                );
+
+
+            if (
+                editModal &&
+                typeof bootstrap !== 'undefined'
+            ) {
+
+                const modal =
+                    new bootstrap.Modal(
+                        editModal
+                    );
+
+
+                modal.show();
+
+            }
+
+        },
+        250
+    );
+
+}
+
+
+/* =========================================================
+   KONFIRMASI HAPUS SKILL
+========================================================= */
+
+function confirmSkillDelete(form)
+{
+
+    const nameInput =
+        form.querySelector(
+            'input[name="skill_name"]'
+        );
+
+
+    const nama =
+        nameInput
+            ? nameInput.value
+            : 'skill ini';
+
+
+    return confirm(
+        'Apakah kamu yakin ingin menghapus skill "' +
+        nama +
+        '"?\n\n' +
+        'Jika skill sudah digunakan pada training atau penilaian, ' +
+        'skill tidak dapat dihapus.'
+    );
+
+}
+
+
+/* =========================================================
+   PESERTA TRAINING
+========================================================= */
+let participantModalInstance=null; let currentParticipantTrainingId=0;
+function escapeHtml(value){return String(value??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');}
+function formatParticipantValue(value){if(value===null||value===undefined||value==='')return '<span class="text-muted">Belum dinilai</span>';const n=parseFloat(value);return '<span class="'+(n<2.5?'participant-value-low':'participant-value-normal')+'">'+n.toFixed(2)+'</span>';}
+function openParticipantManager(trainingId,trainingName){currentParticipantTrainingId=parseInt(trainingId||'0',10);const modalElement=document.getElementById('modalPesertaTraining');if(!modalElement||currentParticipantTrainingId<=0)return;participantModalInstance=bootstrap.Modal.getOrCreateInstance(modalElement);document.getElementById('participantModalTitle').textContent='Peserta: '+(trainingName||'Training');document.getElementById('participantLoading').style.display='block';document.getElementById('participantContent').style.display='none';document.getElementById('participantError').style.display='none';participantModalInstance.show();fetch('index.php?participant_data='+encodeURIComponent(currentParticipantTrainingId),{headers:{'X-Requested-With':'XMLHttpRequest'}}).then(r=>r.json()).then(data=>{if(!data.success)throw new Error(data.message||'Gagal memuat peserta.');document.getElementById('sync_training_id').value=currentParticipantTrainingId;document.getElementById('add_training_id').value=currentParticipantTrainingId;const skillName=data.training&&data.training.nama_skill?data.training.nama_skill:'tanpa skill';document.getElementById('participantRuleText').innerHTML='Otomatis: nilai <strong>&lt; 2,5</strong> pada skill <strong>'+escapeHtml(skillName)+'</strong>'+(data.latest_year?' tahun <strong>'+escapeHtml(data.latest_year)+'</strong>.':'.');renderParticipantTable(data.participants||[]);renderWorkerOptions(data.workers||[],data.participants||[]);document.getElementById('participantLoading').style.display='none';document.getElementById('participantContent').style.display='block';}).catch(error=>{document.getElementById('participantLoading').style.display='none';const box=document.getElementById('participantError');box.textContent=error.message||'Gagal memuat peserta.';box.style.display='block';});}
+function renderParticipantTable(participants){
+    const container=document.getElementById('participantTableBody');
+    if(!container)return;
+    if(!participants.length){
+        container.innerHTML='<div class="department-group"><div class="text-center py-4 text-muted"><i class="bi bi-people fs-4 d-block mb-2"></i>Belum ada peserta training.</div></div>';
+        return;
+    }
+
+    const grouped={};
+    participants.forEach(row=>{
+        const dept=String(row.departemen||'').trim()||'Tanpa Departemen';
+        if(!grouped[dept])grouped[dept]=[];
+        grouped[dept].push(row);
+    });
+
+    const departments=Object.keys(grouped).sort((a,b)=>a.localeCompare(b,'id',{numeric:true,sensitivity:'base'}));
+    let html='';
+
+    departments.forEach(dept=>{
+        const rows=grouped[dept];
+        html+='<div class="department-group">';
+        html+='<div class="department-group-header">';
+        html+='<div class="department-group-left">';
+        html+='<span class="department-icon"><i class="bi bi-building"></i></span>';
+        html+='<div><div class="department-group-title">'+escapeHtml(dept)+'</div><div class="department-group-meta">Daftar peserta training</div></div>';
+        html+='</div>';
+        html+='<span class="department-group-count"><i class="bi bi-people me-1"></i>'+rows.length+' peserta</span>';
+        html+='</div>';
+        html+='<div class="table-responsive"><table class="table table-hover training-table mb-0"><thead><tr><th width="45">No</th><th>Pekerja</th><th>Keterangan</th><th>Nilai</th><th>Sumber</th><th width="70" class="text-end">Aksi</th></tr></thead><tbody>';
+
+        rows.forEach((row,index)=>{
+            const auto=String(row.sumber||'')==='otomatis';
+            html+='<tr>';
+            html+='<td>'+(index+1)+'</td>';
+            html+='<td><div class="fw-semibold" style="color:#172033;">'+escapeHtml(row.nama)+'</div><div class="small text-muted" style="font-size:9px;">No. Reg: '+escapeHtml(row.no_reg||'-')+'</div></td>';
+            html+='<td>'+escapeHtml(row.keterangan||'-')+'</td>';
+            html+='<td>'+formatParticipantValue(row.nilai)+'</td>';
+            html+='<td><span class="participant-source '+(auto?'participant-source-auto':'participant-source-manual')+'"><i class="bi '+(auto?'bi-magic':'bi-person-plus')+'"></i>'+(auto?'Otomatis':'Manual')+'</span></td>';
+            html+='<td class="text-end"><form method="post" class="d-inline" onsubmit="return confirm(\'Hapus pekerja ini dari peserta training?\');"><input type="hidden" name="action" value="remove_participant"><input type="hidden" name="participant_id" value="'+parseInt(row.id||0,10)+'"><input type="hidden" name="training_id" value="'+currentParticipantTrainingId+'"><button type="submit" class="btn btn-sm btn-outline-danger" title="Hapus peserta"><i class="bi bi-trash"></i></button></form></td>';
+            html+='</tr>';
+        });
+
+        html+='</tbody></table></div></div>';
+    });
+
+    container.innerHTML=html;
+}
+function renderWorkerOptions(workers,participants){const select=document.getElementById('participantWorkerSelect');if(!select)return;const selected={};participants.forEach(r=>selected[String(r.id_pekerja)]=true);let html='<option value="">-- Pilih Pekerja --</option>';workers.forEach(w=>{if(selected[String(w.id)])return;let label=(w.nama||'Tanpa Nama')+' • No. Reg: '+(w.no_reg||'-');if(w.departemen)label+=' • '+w.departemen;if(w.keterangan)label+=' • '+w.keterangan;label+=w.nilai!==null&&w.nilai!==undefined?' • Nilai: '+parseFloat(w.nilai).toFixed(2):' • Nilai: belum dinilai';html+='<option value="'+parseInt(w.id,10)+'">'+escapeHtml(label)+'</option>';});select.innerHTML=html;}
+
+/* =========================================================
+   KONFIRMASI HAPUS TRAINING
+========================================================= */
+
+function confirmDelete(form)
+{
 
     const button =
         form.querySelector(

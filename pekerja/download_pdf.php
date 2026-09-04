@@ -3,8 +3,7 @@
 /* =========================================================
    DOWNLOAD PDF DETAIL PEKERJA
    GARUDAFOOD SKILL MONITORING
-   VERSI SESUAI DETAIL PEKERJA
-========================================================= */
+   ========================================================= */
 
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
@@ -43,7 +42,9 @@ foreach ($possible_connections as $connection_file) {
         $connection_loaded = true;
 
         break;
+
     }
+
 }
 
 
@@ -141,6 +142,7 @@ if (!file_exists($autoload_file)) {
 
 }
 
+
 require_once $autoload_file;
 
 
@@ -235,6 +237,17 @@ if (!$pekerja) {
 
 /* =========================================================
    SEMUA TAHUN PENILAIAN
+   =========================================================
+   PENTING:
+   Tahun diurutkan ASCENDING.
+   
+   Contoh:
+   2024
+   2025
+   2026
+   
+   Dengan begitu tahun terbaru selalu berada
+   di kolom paling kanan.
 ========================================================= */
 
 $years = [];
@@ -246,7 +259,7 @@ $stmt = $conn->prepare("
     WHERE id_pekerja = ?
       AND tahun IS NOT NULL
       AND tahun > 0
-    ORDER BY tahun DESC
+    ORDER BY tahun ASC
 ");
 
 if ($stmt) {
@@ -269,6 +282,23 @@ if ($stmt) {
     $stmt->close();
 
 }
+
+
+/* =========================================================
+   PASTIKAN URUTAN TAHUN BENAR
+   LAMA -> TERBARU
+========================================================= */
+
+$years = array_values(
+    array_unique(
+        array_map(
+            'intval',
+            $years
+        )
+    )
+);
+
+sort($years, SORT_NUMERIC);
 
 
 /* =========================================================
@@ -348,6 +378,7 @@ while ($row = $history_result->fetch_assoc()) {
 
     $tahun = (int)$row['tahun'];
 
+
     if (!isset($history[$skill_id])) {
 
         $history[$skill_id] = [
@@ -367,13 +398,30 @@ while ($row = $history_result->fetch_assoc()) {
     }
 
 
-    $history[$skill_id]['years'][$tahun] = $row;
+    /*
+       Simpan data per tahun.
+
+       Kalau terdapat lebih dari satu penilaian
+       dalam tahun yang sama, data dengan ID terbesar
+       dianggap sebagai data terbaru.
+    */
+
+    if (
+        !isset(
+            $history[$skill_id]['years'][$tahun]
+        )
+        ||
+        (int)$row['id'] >
+        (int)$history[$skill_id]['years'][$tahun]['id']
+    ) {
+
+        $history[$skill_id]['years'][$tahun] = $row;
+
+    }
 
 
     /*
-       Data terbaru berdasarkan:
-       tahun terbesar,
-       kemudian ID terbesar.
+       Tentukan data terbaru per skill.
     */
 
     if (
@@ -401,8 +449,8 @@ $stmt->close();
 
 
 /* =========================================================
-   AMBIL SKILL AKTIF YANG BELUM PUNYA NILAI
-   SUPAYA SKILL MAPPING TETAP LENGKAP
+   AMBIL SKILL AKTIF
+   TERMASUK SKILL YANG BELUM DINILAI
 ========================================================= */
 
 $skill_data = [];
@@ -427,6 +475,7 @@ if ($stmt) {
         $id_skill = (int)$row['id_skill'];
 
         $latest = null;
+
 
         if (
             isset($history[$id_skill])
@@ -506,7 +555,7 @@ foreach ($skill_data as &$skill) {
 
 
     /*
-       TARGET DEFAULT SESUAI DETAIL PEKERJA
+       TARGET DEFAULT
     */
 
     $target = 3;
@@ -577,14 +626,18 @@ foreach ($skill_data as &$skill) {
             ? $nilai
             : 0;
 
+
     $skill['target'] =
         $target;
+
 
     $skill['gap'] =
         $gap;
 
+
     $skill['status_label'] =
         $status;
+
 
     $skill['status_class'] =
         $status_class;
@@ -710,15 +763,18 @@ $training_priority =
 
 /* =========================================================
    RINGKASAN PER TAHUN
+   URUTAN TAHUN: LAMA -> TERBARU
 ========================================================= */
 
 $year_summary = [];
+
 
 foreach ($years as $year) {
 
     $total = 0;
 
     $count = 0;
+
 
     foreach ($history as $item) {
 
@@ -1550,6 +1606,19 @@ body {
 }
 
 
+/*
+   Setiap kolom tahun memiliki lebar yang sama.
+*/
+
+.history-table th:not(.skill-head),
+.history-table td:not(:first-child) {
+
+    width:
+        auto;
+
+}
+
+
 .history-table td {
 
     border:
@@ -1560,6 +1629,9 @@ body {
 
     font-size:
         7px;
+
+    vertical-align:
+        middle;
 
 }
 
@@ -2137,19 +2209,23 @@ Rata-rata Skill
 </div>
 
 <div class="stat-value">
+
 <?= number_format(
     $rata_rata,
     2
 ) ?>
+
 </div>
 
 <div class="stat-note">
+
 Target rata-rata
 <?= number_format(
     $rata_target,
     2
 ) ?>
 / 5
+
 </div>
 
 </td>
@@ -2162,9 +2238,11 @@ Skill Kompeten
 </div>
 
 <div class="stat-value">
+
 <?= number_format(
     $total_kompeten
 ) ?>
+
 </div>
 
 <div class="stat-note">
@@ -2181,9 +2259,11 @@ Perlu Peningkatan
 </div>
 
 <div class="stat-value">
+
 <?= number_format(
     $total_peningkatan
 ) ?>
+
 </div>
 
 <div class="stat-note">
@@ -2200,9 +2280,11 @@ Perlu Training
 </div>
 
 <div class="stat-value">
+
 <?= number_format(
     $total_training
 ) ?>
+
 </div>
 
 <div class="stat-note">
@@ -2235,10 +2317,7 @@ Prioritas pengembangan
 
 <tr>
 
-<th
-    width="5%"
-    class="center"
->
+<th width="5%" class="center">
 No
 </th>
 
@@ -2246,24 +2325,15 @@ No
 Kompetensi / Skill
 </th>
 
-<th
-    width="10%"
-    class="center"
->
+<th width="10%" class="center">
 Nilai
 </th>
 
-<th
-    width="10%"
-    class="center"
->
+<th width="10%" class="center">
 Target
 </th>
 
-<th
-    width="10%"
-    class="center"
->
+<th width="10%" class="center">
 Gap
 </th>
 
@@ -2420,7 +2490,15 @@ Belum ada data kompetensi.
 
 
 <!-- =====================================================
-     04 RIWAYAT PENILAIAN - MATRIX
+     04 RIWAYAT PENILAIAN
+     
+     URUTAN TAHUN:
+     PALING LAMA -> PALING BARU
+     
+     Contoh:
+     2024 | 2025 | 2026
+                    ↑
+              terbaru di kanan
 ===================================================== -->
 
 <div class="section">
@@ -2433,7 +2511,7 @@ Belum ada data kompetensi.
 <div class="small" style="margin-bottom:6px;">
 
 Setiap tahun ditampilkan sebagai kolom.
-Nilai terbaru dapat dibandingkan langsung dengan nilai tahun sebelumnya.
+Tahun terbaru selalu berada di sebelah kanan.
 
 </div>
 
@@ -2451,6 +2529,19 @@ Nilai terbaru dapat dibandingkan langsung dengan nilai tahun sebelumnya.
 Kompetensi / Skill
 </th>
 
+
+<?php
+/*
+   PENTING:
+   $years SUDAH diurutkan ASCENDING.
+
+   Jadi:
+   2024 -> 2025 -> 2026
+
+   bukan:
+   2026 -> 2025 -> 2024
+*/
+?>
 
 <?php foreach ($years as $year): ?>
 
@@ -2558,6 +2649,9 @@ Belum ada riwayat penilaian skill.
 
 <!-- =====================================================
      05 PERKEMBANGAN NILAI PER SKILL
+     
+     URUTAN:
+     TAHUN LAMA -> TAHUN TERBARU
 ===================================================== -->
 
 <div class="section">
@@ -2868,6 +2962,9 @@ prioritas training.
 
 <!-- =====================================================
      07 RINGKASAN PERKEMBANGAN TAHUN
+     
+     URUTAN:
+     TAHUN LAMA -> TERBARU
 ===================================================== -->
 
 <div class="section">
@@ -2908,11 +3005,23 @@ Perubahan
 
 <?php
 
-$years_asc =
-    $years;
+/*
+   Jangan menggunakan DESC di sini.
+
+   $years sudah:
+   2024
+   2025
+   2026
+
+   sehingga perkembangan dihitung:
+   2024 -> 2025 -> 2026
+*/
+
+$years_asc = $years;
 
 sort(
-    $years_asc
+    $years_asc,
+    SORT_NUMERIC
 );
 
 
@@ -2968,6 +3077,7 @@ if (
 
 $count_year = 0;
 
+
 foreach ($history as $item) {
 
     if (
@@ -3007,7 +3117,7 @@ foreach ($history as $item) {
 
 </strong>
 
- / 5
+/ 5
 
 <?php else: ?>
 
@@ -3359,6 +3469,7 @@ Dokumen dibuat otomatis oleh sistem
 </html>
 
 <?php
+
 
 $html =
     ob_get_clean();

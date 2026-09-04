@@ -1,9 +1,21 @@
 <?php
-/* =========================================================
-   GARUDAFOOD SKILL MONITORING
-   PENILAIAN SKILL
-========================================================= */
 
+/*
+|--------------------------------------------------------------------------
+| PENILAIAN SKILL
+|--------------------------------------------------------------------------
+| File : penilaian/index.php
+|--------------------------------------------------------------------------
+| FUNGSI:
+| - Tambah nilai skill terbaru
+| - Tidak menimpa history nilai sebelumnya
+| - Terhubung dengan Data Pekerja
+| - Menampilkan nilai terbaru
+| - Menampilkan history penilaian
+|--------------------------------------------------------------------------
+*/
+
+mysqli_report(MYSQLI_REPORT_OFF);
 
 /* =========================================================
    PAGE TITLE
@@ -11,277 +23,534 @@
 
 $page_title = 'Penilaian Skill';
 
+/* =========================================================
+   KONEKSI DATABASE
+========================================================= */
+
+require_once __DIR__ . '/../config/database.php';
 
 /* =========================================================
-   PROSES SIMPAN / UPDATE PENILAIAN
-   DILAKUKAN SEBELUM HEADER.HTML
+   CEK KONEKSI
+========================================================= */
+
+if (!isset($conn) || !($conn instanceof mysqli)) {
+
+    die(
+        'Koneksi database tidak tersedia. ' .
+        'Periksa config/database.php'
+    );
+}
+
+if ($conn->connect_errno) {
+
+    die(
+        'Koneksi database gagal: ' .
+        $conn->connect_error
+    );
+}
+
+/* =========================================================
+   HELPER
+========================================================= */
+
+if (!function_exists('e')) {
+
+    function e($value)
+    {
+        return htmlspecialchars(
+            (string)$value,
+            ENT_QUOTES,
+            'UTF-8'
+        );
+    }
+}
+
+/* =========================================================
+   VARIABEL
+========================================================= */
+
+$error   = "";
+$success = "";
+
+/* =========================================================
+   PROSES TAMBAH NILAI TERBARU
 ========================================================= */
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
-    $id_pekerja =
-        (int) ($_POST['id_pekerja'] ?? 0);
+    /* =====================================================
+       AMBIL INPUT
+    ===================================================== */
 
-    $id_skill =
-        (int) ($_POST['id_skill'] ?? 0);
+    $id_pekerja = isset($_POST['id_pekerja'])
+        ? (int)$_POST['id_pekerja']
+        : 0;
 
-    $tahun =
-        (int) ($_POST['tahun'] ?? date('Y'));
+    $id_skill = isset($_POST['id_skill'])
+        ? (int)$_POST['id_skill']
+        : 0;
 
-    $nilai =
-        (int) ($_POST['nilai'] ?? 1);
+    $tahun = isset($_POST['tahun'])
+        ? (int)$_POST['tahun']
+        : 0;
 
-    $nilai = max(
-        1,
-        min(
-            5,
-            $nilai
-        )
-    );
+    $nilai = isset($_POST['nilai'])
+        ? (int)$_POST['nilai']
+        : 0;
 
     $tanggal_penilaian =
-        trim(
-            $_POST['tanggal_penilaian']
-            ?? ''
-        );
-
-    if ($tanggal_penilaian === '') {
-        $tanggal_penilaian = date('Y-m-d');
-    }
+        isset($_POST['tanggal_penilaian'])
+            ? trim($_POST['tanggal_penilaian'])
+            : '';
 
     $assessor =
-        trim(
-            $_POST['assessor']
-            ?? ''
-        );
+        isset($_POST['assessor'])
+            ? trim($_POST['assessor'])
+            : '';
 
     $catatan =
-        trim(
-            $_POST['catatan']
-            ?? ''
-        );
-
+        isset($_POST['catatan'])
+            ? trim($_POST['catatan'])
+            : '';
 
     /* =====================================================
-       VALIDASI DASAR
+       VALIDASI
     ===================================================== */
 
-    if (
-        $id_pekerja <= 0 ||
-        $id_skill <= 0 ||
-        $tahun < 2020 ||
-        $tahun > 2100
-    ) {
+    if ($id_pekerja <= 0) {
 
-        header(
-            'Location: index.php?error=invalid'
-        );
+        $error = "Pekerja wajib dipilih.";
 
-        exit;
+    } elseif ($id_skill <= 0) {
+
+        $error = "Skill wajib dipilih.";
+
+    } elseif ($tahun < 2000 || $tahun > 2100) {
+
+        $error = "Tahun penilaian tidak valid.";
+
+    } elseif ($nilai < 1 || $nilai > 5) {
+
+        $error =
+            "Nilai skill harus berupa 1, 2, 3, 4, atau 5.";
+
+    } elseif ($tanggal_penilaian === '') {
+
+        $error = "Tanggal penilaian wajib diisi.";
+
+    } elseif ($assessor === '') {
+
+        $error = "Assessor wajib diisi.";
     }
-
 
     /* =====================================================
-       PASTIKAN PEKERJA AKTIF
+       CEK PEKERJA
     ===================================================== */
 
-    $checkWorker = $conn->prepare("
-        SELECT id
-        FROM pekerja
-        WHERE id = ?
-          AND status = 'Aktif'
-        LIMIT 1
-    ");
+    if ($error === '') {
 
-    if (!$checkWorker) {
+        $stmt = $conn->prepare("
+            SELECT
+                id,
+                nama,
+                no_reg,
+                departemen,
+                keterangan
+            FROM pekerja
+            WHERE id = ?
+              AND status = 'Aktif'
+            LIMIT 1
+        ");
 
-        die(
-            'Gagal memeriksa pekerja: ' .
-            htmlspecialchars(
-                $conn->error,
-                ENT_QUOTES,
-                'UTF-8'
-            )
-        );
+        if (!$stmt) {
+
+            $error =
+                "GAGAL MEMERIKSA DATA PEKERJA: " .
+                $conn->error;
+
+        } else {
+
+            $stmt->bind_param(
+                "i",
+                $id_pekerja
+            );
+
+            if (!$stmt->execute()) {
+
+                $error =
+                    "GAGAL MEMERIKSA PEKERJA: " .
+                    $stmt->error;
+
+            } else {
+
+                $stmt->store_result();
+
+                if ($stmt->num_rows === 0) {
+
+                    $error =
+                        "Pekerja dengan ID " .
+                        $id_pekerja .
+                        " tidak ditemukan atau statusnya Nonaktif.";
+                }
+            }
+
+            $stmt->close();
+        }
     }
-
-    $checkWorker->bind_param(
-        'i',
-        $id_pekerja
-    );
-
-    $checkWorker->execute();
-
-    $workerResult =
-        $checkWorker->get_result();
-
-    if (
-        !$workerResult ||
-        $workerResult->num_rows <= 0
-    ) {
-
-        $checkWorker->close();
-
-        header(
-            'Location: index.php?error=worker'
-        );
-
-        exit;
-    }
-
-    $checkWorker->close();
-
 
     /* =====================================================
-       PASTIKAN SKILL AKTIF
+       CEK SKILL
     ===================================================== */
 
-    $checkSkill = $conn->prepare("
-        SELECT id
-        FROM skill
-        WHERE id = ?
-          AND status = 'Aktif'
-        LIMIT 1
-    ");
+    if ($error === '') {
 
-    if (!$checkSkill) {
+        $stmt = $conn->prepare("
+            SELECT
+                id,
+                nama_skill
+            FROM skill
+            WHERE id = ?
+              AND status = 'Aktif'
+            LIMIT 1
+        ");
 
-        die(
-            'Gagal memeriksa skill: ' .
-            htmlspecialchars(
-                $conn->error,
-                ENT_QUOTES,
-                'UTF-8'
-            )
-        );
+        if (!$stmt) {
+
+            $error =
+                "GAGAL MEMERIKSA DATA SKILL: " .
+                $conn->error;
+
+        } else {
+
+            $stmt->bind_param(
+                "i",
+                $id_skill
+            );
+
+            if (!$stmt->execute()) {
+
+                $error =
+                    "GAGAL MEMERIKSA SKILL: " .
+                    $stmt->error;
+
+            } else {
+
+                $stmt->store_result();
+
+                if ($stmt->num_rows === 0) {
+
+                    $error =
+                        "Skill dengan ID " .
+                        $id_skill .
+                        " tidak ditemukan atau statusnya Nonaktif.";
+                }
+            }
+
+            $stmt->close();
+        }
     }
-
-    $checkSkill->bind_param(
-        'i',
-        $id_skill
-    );
-
-    $checkSkill->execute();
-
-    $skillResult =
-        $checkSkill->get_result();
-
-    if (
-        !$skillResult ||
-        $skillResult->num_rows <= 0
-    ) {
-
-        $checkSkill->close();
-
-        header(
-            'Location: index.php?error=skill'
-        );
-
-        exit;
-    }
-
-    $checkSkill->close();
-
 
     /* =====================================================
-       SIMPAN / UPDATE
-       
-       Kombinasi:
-       id_pekerja + id_skill + tahun
-       
-       Jika sudah ada:
-       UPDATE nilai terbaru.
-       
-       Tahun sebelumnya tetap tersimpan.
+       INSERT NILAI TERBARU
+
+       PENTING:
+       TIDAK ADA UPDATE.
+
+       Setiap penilaian baru akan menjadi record baru,
+       sehingga history nilai sebelumnya tetap tersimpan.
     ===================================================== */
 
-    $sql = "
+    if ($error === '') {
 
-        INSERT INTO penilaian_skill
-
-        (
-            id_pekerja,
-            id_skill,
-            tahun,
-            nilai,
-            tanggal_penilaian,
-            assessor,
-            catatan
-        )
-
-        VALUES
-
-        (?, ?, ?, ?, ?, ?, ?)
-
-        ON DUPLICATE KEY UPDATE
-
-            nilai =
-                VALUES(nilai),
-
-            tanggal_penilaian =
-                VALUES(tanggal_penilaian),
-
-            assessor =
-                VALUES(assessor),
-
-            catatan =
-                VALUES(catatan)
-
-    ";
-
-
-    $st =
-        $conn->prepare($sql);
-
-
-    if (!$st) {
-
-        die(
-            'Gagal menyiapkan penyimpanan penilaian: ' .
-            htmlspecialchars(
-                $conn->error,
-                ENT_QUOTES,
-                'UTF-8'
+        $stmt = $conn->prepare("
+            INSERT INTO penilaian_skill
+            (
+                id_pekerja,
+                id_skill,
+                tahun,
+                nilai,
+                tanggal_penilaian,
+                assessor,
+                catatan
             )
-        );
-    }
-
-
-    $st->bind_param(
-        'iiiisss',
-        $id_pekerja,
-        $id_skill,
-        $tahun,
-        $nilai,
-        $tanggal_penilaian,
-        $assessor,
-        $catatan
-    );
-
-
-    if (!$st->execute()) {
-
-        die(
-            'Gagal menyimpan penilaian: ' .
-            htmlspecialchars(
-                $st->error,
-                ENT_QUOTES,
-                'UTF-8'
+            VALUES
+            (
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?
             )
-        );
+        ");
+
+        if (!$stmt) {
+
+            $error =
+                "GAGAL MENYIAPKAN SIMPAN DATA: " .
+                $conn->error;
+
+        } else {
+
+            $stmt->bind_param(
+                "iiiisss",
+                $id_pekerja,
+                $id_skill,
+                $tahun,
+                $nilai,
+                $tanggal_penilaian,
+                $assessor,
+                $catatan
+            );
+
+            if (!$stmt->execute()) {
+
+                $error =
+                    "GAGAL MENYIMPAN DATA PENILAIAN: " .
+                    $stmt->error;
+
+                $stmt->close();
+
+            } else {
+
+                $new_id = (int)$stmt->insert_id;
+
+                $stmt->close();
+
+                /* =========================================
+                   VERIFIKASI DATA
+                ========================================== */
+
+                $check = $conn->prepare("
+                    SELECT
+                        ps.id,
+                        ps.id_pekerja,
+                        ps.id_skill,
+                        ps.tahun,
+                        ps.nilai,
+                        p.nama,
+                        s.nama_skill
+                    FROM penilaian_skill ps
+
+                    INNER JOIN pekerja p
+                        ON p.id = ps.id_pekerja
+
+                    INNER JOIN skill s
+                        ON s.id = ps.id_skill
+
+                    WHERE ps.id = ?
+
+                    LIMIT 1
+                ");
+
+                $saved_ok = false;
+
+                if ($check) {
+
+                    $check->bind_param(
+                        "i",
+                        $new_id
+                    );
+
+                    if ($check->execute()) {
+
+                        $check->store_result();
+
+                        if ($check->num_rows > 0) {
+
+                            $saved_ok = true;
+                        }
+                    }
+
+                    $check->close();
+                }
+
+                if ($saved_ok) {
+
+                    header(
+                        "Location: index.php?saved=inserted"
+                    );
+
+                    exit;
+
+                } else {
+
+                    $error =
+                        "Data berhasil INSERT tetapi " .
+                        "tidak dapat diverifikasi kembali. " .
+                        "Periksa tabel penilaian_skill.";
+                }
+            }
+        }
     }
-
-
-    $st->close();
-
-
-    header(
-        'Location: index.php?saved=1'
-    );
-
-    exit;
 }
 
+/* =========================================================
+   PESAN SUKSES
+========================================================= */
+
+if (isset($_GET['saved'])) {
+
+    if ($_GET['saved'] === 'inserted') {
+
+        $success =
+            "Nilai terbaru berhasil ditambahkan. " .
+            "Nilai sebelumnya tetap tersimpan di history.";
+    }
+}
+
+/* =========================================================
+   AMBIL DATA PEKERJA
+========================================================= */
+
+$workers = [];
+
+$sqlWorkers = "
+
+    SELECT
+        id,
+        no_reg,
+        nama,
+        departemen,
+        keterangan,
+        status
+
+    FROM pekerja
+
+    WHERE status = 'Aktif'
+
+    ORDER BY
+        nama ASC
+";
+
+$resultWorkers = $conn->query(
+    $sqlWorkers
+);
+
+if ($resultWorkers === false) {
+
+    if ($error === '') {
+
+        $error =
+            "GAGAL MEMUAT DATA PEKERJA: " .
+            $conn->error;
+    }
+
+} else {
+
+    while ($row = $resultWorkers->fetch_assoc()) {
+
+        $workers[] = $row;
+    }
+}
+
+/* =========================================================
+   AMBIL DATA SKILL
+========================================================= */
+
+$skills = [];
+
+$sqlSkills = "
+
+    SELECT
+        id,
+        nama_skill,
+        status
+
+    FROM skill
+
+    WHERE status = 'Aktif'
+
+    ORDER BY
+        nama_skill ASC
+";
+
+$resultSkills = $conn->query(
+    $sqlSkills
+);
+
+if ($resultSkills === false) {
+
+    if ($error === '') {
+
+        $error =
+            "GAGAL MEMUAT DATA SKILL: " .
+            $conn->error;
+    }
+
+} else {
+
+    while ($row = $resultSkills->fetch_assoc()) {
+
+        $skills[] = $row;
+    }
+}
+
+/* =========================================================
+   HISTORY PENILAIAN
+========================================================= */
+
+$history = [];
+
+$sqlHistory = "
+
+    SELECT
+
+        ps.id,
+        ps.id_pekerja,
+        ps.id_skill,
+        ps.tahun,
+        ps.nilai,
+        ps.tanggal_penilaian,
+        ps.assessor,
+        ps.catatan,
+        ps.created_at,
+
+        p.no_reg,
+        p.nama,
+        p.departemen,
+        p.keterangan,
+
+        s.nama_skill
+
+    FROM penilaian_skill ps
+
+    LEFT JOIN pekerja p
+        ON p.id = ps.id_pekerja
+
+    LEFT JOIN skill s
+        ON s.id = ps.id_skill
+
+    ORDER BY
+
+        ps.tahun DESC,
+        ps.tanggal_penilaian DESC,
+        ps.id DESC
+
+    LIMIT 30
+";
+
+$resultHistory = $conn->query(
+    $sqlHistory
+);
+
+if ($resultHistory === false) {
+
+    if ($error === '') {
+
+        $error =
+            "GAGAL MEMUAT HISTORY PENILAIAN: " .
+            $conn->error;
+    }
+
+} else {
+
+    while ($row = $resultHistory->fetch_assoc()) {
+
+        $history[] = $row;
+    }
+}
 
 /* =========================================================
    HEADER
@@ -289,142 +558,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 require __DIR__ . '/../partials/header.php';
 
-
-/* =========================================================
-   DATA PEKERJA
-========================================================= */
-
-$people = $conn->query("
-
-    SELECT
-
-        p.id,
-        p.no_reg,
-        p.nama,
-        p.departemen,
-        p.keterangan
-
-    FROM pekerja p
-
-    WHERE
-        p.status = 'Aktif'
-
-    ORDER BY
-        p.nama ASC
-
-");
-
-
-/* =========================================================
-   DATA SKILL
-========================================================= */
-
-$skills = $conn->query("
-
-    SELECT
-
-        id,
-        nama_skill
-
-    FROM skill
-
-    WHERE
-        status = 'Aktif'
-
-    ORDER BY
-        id ASC
-
-");
-
-
-/* =========================================================
-   RIWAYAT PENILAIAN TERBARU
-========================================================= */
-
-$recent = $conn->query("
-
-    SELECT
-
-        ps.*,
-
-        p.nama,
-        p.no_reg,
-        p.departemen,
-
-        s.nama_skill
-
-    FROM penilaian_skill ps
-
-    INNER JOIN pekerja p
-        ON p.id = ps.id_pekerja
-
-    INNER JOIN skill s
-        ON s.id = ps.id_skill
-
-    ORDER BY
-
-        ps.tanggal_penilaian DESC,
-        ps.id DESC
-
-    LIMIT 15
-
-");
-
-
-/* =========================================================
-   ERROR MESSAGE
-========================================================= */
-
-$error_message = '';
-
-if (
-    isset($_GET['error'])
-) {
-
-    switch (
-        $_GET['error']
-    ) {
-
-        case 'invalid':
-
-            $error_message =
-                'Data penilaian yang dikirim tidak valid.';
-
-            break;
-
-
-        case 'worker':
-
-            $error_message =
-                'Pekerja yang dipilih tidak ditemukan atau sudah tidak aktif.';
-
-            break;
-
-
-        case 'skill':
-
-            $error_message =
-                'Skill yang dipilih tidak ditemukan atau sudah tidak aktif.';
-
-            break;
-
-
-        default:
-
-            $error_message =
-                'Terjadi kesalahan pada data penilaian.';
-
-            break;
-    }
-}
-
 ?>
-
 
 <style>
 
 /* =========================================================
-   ROOT
+   GARUDAFOOD THEME
 ========================================================= */
 
 :root {
@@ -445,226 +584,295 @@ if (
 
     --gf-bg: #f5f7fb;
 
+    --gf-green: #198754;
+
+    --gf-green-bg: #e9f8f0;
+
+    --gf-red: #dc3545;
+
+    --gf-red-bg: #ffecee;
+
+    --gf-yellow: #996c00;
+
+    --gf-yellow-bg: #fff4d6;
 }
 
-
 /* =========================================================
-   PAGE HERO / BLUE CARD
+   PAGE
 ========================================================= */
 
-.page-hero {
+body {
 
-    position: relative;
+    background:
+        var(--gf-bg);
 
-    overflow: hidden;
+    color:
+        var(--gf-text);
+
+    font-family:
+        "Poppins",
+        "Segoe UI",
+        Arial,
+        sans-serif;
+}
+
+.page-wrapper {
+
+    padding:
+        24px;
+
+}
+
+/* =========================================================
+   HERO
+========================================================= */
+
+.hero-card {
+
+    position:
+        relative;
+
+    overflow:
+        hidden;
 
     background:
         linear-gradient(
             135deg,
-            #174b8d 0%,
-            #123f7a 48%,
-            #0c346d 100%
+            var(--gf-blue-dark) 0%,
+            var(--gf-blue) 100%
         );
 
-    border-radius: 17px;
+    color:
+        #ffffff;
 
-    min-height: 141px;
+    border-radius:
+        20px;
 
-    padding: 25px 30px;
+    padding:
+        28px 30px;
 
-    margin-bottom: 25px;
+    margin-bottom:
+        24px;
 
     box-shadow:
         0 10px 28px
-        rgba(18, 63, 122, .16);
-
-    color: #ffffff;
-
+        rgba(9, 47, 99, .16);
 }
 
+.hero-card::after {
 
-/* =========================================================
-   HERO CONTENT
-========================================================= */
+    content:
+        "";
 
-.page-hero-content {
+    position:
+        absolute;
 
-    position: relative;
+    width:
+        220px;
 
-    z-index: 3;
+    height:
+        220px;
 
-    max-width: 850px;
+    right:
+        -80px;
 
-}
-
-
-.page-hero-eyebrow {
-
-    display: inline-flex;
-
-    align-items: center;
-
-    gap: 7px;
-
-    color: rgba(255,255,255,.95);
-
-    font-size: 12px;
-
-    font-weight: 700;
-
-    text-transform: uppercase;
-
-    letter-spacing: .07em;
-
-    margin-bottom: 7px;
-
-}
-
-
-.page-hero-title {
-
-    margin: 0;
-
-    color: #ffffff;
-
-    font-size: 28px;
-
-    line-height: 1.2;
-
-    font-weight: 800;
-
-}
-
-
-.page-hero-description {
-
-    margin-top: 8px;
-
-    color: rgba(255,255,255,.82);
-
-    font-size: 13px;
-
-    line-height: 1.6;
-
-}
-
-
-/* =========================================================
-   HERO DECORATION
-========================================================= */
-
-.page-hero-circle-1 {
-
-    position: absolute;
-
-    width: 155px;
-
-    height: 155px;
-
-    border-radius: 50%;
-
-    right: 65px;
-
-    top: -75px;
+    top:
+        -120px;
 
     background:
-        rgba(255,255,255,.035);
+        rgba(255,255,255,.06);
 
+    border-radius:
+        50%;
 }
 
+.hero-card .eyebrow {
 
-.page-hero-circle-2 {
+    position:
+        relative;
 
-    position: absolute;
+    z-index:
+        1;
 
-    width: 125px;
+    font-size:
+        11px;
 
-    height: 125px;
+    font-weight:
+        700;
 
-    border-radius: 50%;
+    letter-spacing:
+        .1em;
 
-    right: -20px;
+    opacity:
+        .8;
 
-    bottom: -60px;
+    margin-bottom:
+        7px;
 
-    background:
-        rgba(255,255,255,.055);
-
+    text-transform:
+        uppercase;
 }
 
+.hero-card h1 {
 
-.page-hero-circle-3 {
+    position:
+        relative;
 
-    position: absolute;
+    z-index:
+        1;
 
-    width: 80px;
+    font-size:
+        28px;
 
-    height: 80px;
+    font-weight:
+        750;
 
-    border-radius: 50%;
-
-    right: 145px;
-
-    bottom: -35px;
-
-    background:
-        rgba(255,255,255,.035);
-
+    margin:
+        0 0 8px;
 }
 
+.hero-card p {
+
+    position:
+        relative;
+
+    z-index:
+        1;
+
+    margin:
+        0;
+
+    font-size:
+        13px;
+
+    line-height:
+        1.6;
+
+    opacity:
+        .82;
+
+}
 
 /* =========================================================
    CARD
 ========================================================= */
 
-.cardx {
+.card-custom {
 
-    background: #ffffff;
+    background:
+        #ffffff;
 
-    border: 1px solid var(--gf-border);
+    border:
+        1px solid var(--gf-border);
 
-    border-radius: 17px;
+    border-radius:
+        17px;
 
-    padding: 24px;
+    padding:
+        24px;
+
+    margin-bottom:
+        24px;
 
     box-shadow:
         0 5px 20px
-        rgba(20, 43, 76, .045);
-
-    margin-bottom: 20px;
-
+        rgba(20,43,76,.045);
 }
 
-
 /* =========================================================
-   CARD TITLE
+   CARD HEADER
 ========================================================= */
+
+.card-header-custom {
+
+    display:
+        flex;
+
+    justify-content:
+        space-between;
+
+    align-items:
+        center;
+
+    gap:
+        15px;
+
+    flex-wrap:
+        wrap;
+
+    margin-bottom:
+        22px;
+}
 
 .card-title-custom {
 
-    color: #172033;
+    font-size:
+        17px;
 
-    font-size: 16px;
+    font-weight:
+        750;
 
-    font-weight: 750;
+    color:
+        var(--gf-text);
 
-    margin-bottom: 18px;
-
-    display: flex;
-
-    align-items: center;
-
-    gap: 8px;
-
+    margin:
+        0;
 }
-
 
 .card-title-custom i {
 
-    color: var(--gf-blue);
-
+    color:
+        var(--gf-blue);
 }
 
+.card-description {
+
+    margin-top:
+        5px;
+
+    color:
+        var(--gf-muted);
+
+    font-size:
+        12px;
+
+    line-height:
+        1.5;
+}
+
+/* =========================================================
+   NEW BADGE
+========================================================= */
+
+.badge-new {
+
+    display:
+        inline-flex;
+
+    align-items:
+        center;
+
+    gap:
+        6px;
+
+    padding:
+        7px 11px;
+
+    border-radius:
+        20px;
+
+    background:
+        var(--gf-blue-light);
+
+    color:
+        var(--gf-blue-dark);
+
+    font-size:
+        11px;
+
+    font-weight:
+        700;
+}
 
 /* =========================================================
    FORM
@@ -672,38 +880,51 @@ if (
 
 .form-label {
 
-    font-size: 11px;
+    font-size:
+        12px;
 
-    font-weight: 750;
+    font-weight:
+        650;
 
-    color: #4a5568;
+    color:
+        var(--gf-text);
 
-    text-transform: uppercase;
-
-    letter-spacing: .05em;
-
-    margin-bottom: 6px;
-
+    margin-bottom:
+        7px;
 }
 
+.required {
+
+    color:
+        var(--gf-red);
+}
 
 .form-control,
 .form-select {
 
-    border-color: #dbe2ef;
+    border:
+        1px solid var(--gf-border);
 
-    border-radius: 9px;
+    border-radius:
+        10px;
 
-    font-size: 13px;
+    min-height:
+        44px;
 
-    padding: 10px 14px;
+    font-size:
+        13px;
 
-    color: #2d3748;
-
-    min-height: 43px;
+    color:
+        var(--gf-text);
 
 }
 
+.form-control::placeholder {
+
+    color:
+        #a0a8b5;
+
+}
 
 .form-control:focus,
 .form-select:focus {
@@ -712,269 +933,606 @@ if (
         var(--gf-blue);
 
     box-shadow:
-        0 0 0 3px
-        rgba(18, 63, 122, 0.12);
+        0 0 0 .2rem
+        rgba(18,63,122,.12);
 
 }
-
 
 /* =========================================================
-   SEARCH SELECT
+   SEARCH
 ========================================================= */
 
-.search-select {
+.search-wrapper {
 
-    position: relative;
-
-    width: 100%;
-
+    position:
+        relative;
 }
 
+.search-wrapper i {
 
-.search-select-input {
+    position:
+        absolute;
 
-    width: 100%;
+    left:
+        13px;
 
-    background: #fff;
-
-    cursor: text;
-
-    padding-right: 42px;
-
-}
-
-
-.search-select-input::placeholder {
-
-    color: #9aa4b2;
-
-}
-
-
-.search-select-dropdown {
-
-    position: absolute;
-
-    top: calc(100% + 5px);
-
-    left: 0;
-
-    right: 0;
-
-    z-index: 9999;
-
-    background: #fff;
-
-    border: 1px solid #dbe2ef;
-
-    border-radius: 10px;
-
-    box-shadow:
-        0 12px 30px
-        rgba(20, 43, 76, .14);
-
-    max-height: 250px;
-
-    overflow-y: auto;
-
-    display: none;
-
-}
-
-
-.search-select.open
-.search-select-dropdown {
-
-    display: block;
-
-}
-
-
-.search-option {
-
-    padding: 10px 13px;
-
-    cursor: pointer;
-
-    border-bottom:
-        1px solid #f0f2f5;
-
-    transition:
-        .15s ease;
-
-}
-
-
-.search-option:last-child {
-
-    border-bottom: 0;
-
-}
-
-
-.search-option:hover {
-
-    background:
-        #f3f7fd;
-
-}
-
-
-.search-option-name {
-
-    font-size: 13px;
-
-    font-weight: 600;
-
-    color: #172033;
-
-}
-
-
-.search-option-meta {
-
-    margin-top: 3px;
-
-    font-size: 10px;
-
-    color: #7d8796;
-
-}
-
-
-.search-option-empty {
-
-    padding: 14px;
-
-    text-align: center;
-
-    color: #8a94a4;
-
-    font-size: 12px;
-
-}
-
-
-.search-clear {
-
-    position: absolute;
-
-    right: 10px;
-
-    top: 50%;
+    top:
+        50%;
 
     transform:
         translateY(-50%);
 
-    width: 25px;
+    color:
+        #9aa4b2;
 
-    height: 25px;
+    z-index:
+        2;
+}
 
-    border: 0;
+.search-wrapper .form-control {
 
-    background: transparent;
-
-    color: #8a94a4;
-
-    display: none;
-
-    align-items: center;
-
-    justify-content: center;
-
-    cursor: pointer;
-
-    border-radius: 50%;
-
-    z-index: 2;
+    padding-left:
+        38px;
 
 }
 
+/* =========================================================
+   SINGLE SEARCHABLE PICKER
+========================================================= */
 
-.search-clear:hover {
+.picker {
+    position: relative;
+}
 
-    background:
-        #f1f3f6;
+.picker-control {
+    position: relative;
+}
+
+.picker-control .picker-icon {
+    position: absolute;
+    left: 13px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #9aa4b2;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.picker-control .picker-arrow {
+    position: absolute;
+    right: 13px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #7d8796;
+    z-index: 2;
+    pointer-events: none;
+    transition: .2s ease;
+}
+
+.picker.open .picker-arrow {
+    transform: translateY(-50%) rotate(180deg);
+}
+
+.picker-input {
+    width: 100%;
+    padding: 0 42px 0 38px !important;
+    cursor: text;
+}
+
+.picker-dropdown {
+    display: none;
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 7px);
+    z-index: 1050;
+    background: #ffffff;
+    border: 1px solid var(--gf-border);
+    border-radius: 12px;
+    padding: 6px;
+    max-height: 270px;
+    overflow-y: auto;
+    box-shadow: 0 12px 30px rgba(20,43,76,.12);
+}
+
+.picker.open .picker-dropdown {
+    display: block;
+}
+
+.picker-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    border-radius: 9px;
+    padding: 10px 11px;
+    color: var(--gf-text);
+    cursor: pointer;
+    transition: .15s ease;
+}
+
+.picker-option:hover,
+.picker-option.active {
+    background: var(--gf-blue-light);
+}
+
+.picker-option-name {
+    display: block;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.4;
+}
+
+.picker-option-meta {
+    display: block;
+    margin-top: 2px;
+    color: var(--gf-muted);
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.picker-empty {
+    padding: 15px 12px;
+    color: var(--gf-muted);
+    text-align: center;
+    font-size: 11px;
+}
+
+.picker-input.is-selected {
+    background: #f8faff;
+    border-color: #cddcf0;
+}
+
+.picker-selected-clear {
+    position: absolute;
+    right: 35px;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 0;
+    background: transparent;
+    color: #8b95a4;
+    display: none;
+    padding: 2px 5px;
+    z-index: 3;
+}
+
+.picker.has-value .picker-selected-clear {
+    display: block;
+}
+
+.picker.has-value .picker-arrow {
+    right: 11px;
+}
+
+@media (max-width: 768px) {
+    .picker-dropdown {
+        max-height: 230px;
+    }
+}
+
+/* =========================================================
+   HELP TEXT
+========================================================= */
+
+.form-help {
+
+    margin-top:
+        6px;
 
     color:
-        #4a5568;
+        var(--gf-muted);
+
+    font-size:
+        11px;
 
 }
 
+/* =========================================================
+   SCORE BOX
+========================================================= */
 
-.search-select.has-value
-.search-clear {
+.score-box {
 
-    display: flex;
+    background:
+        #f8faff;
+
+    border:
+        1px solid #dce7f7;
+
+    border-radius:
+        13px;
+
+    padding:
+        15px;
 
 }
 
+.score-box-label {
+
+    color:
+        var(--gf-muted);
+
+    font-size:
+        11px;
+
+    font-weight:
+        600;
+
+    margin-bottom:
+        7px;
+}
+
+.score-input {
+
+    font-size:
+        20px !important;
+
+    font-weight:
+        750;
+
+    text-align:
+        center;
+
+    color:
+        var(--gf-blue-dark) !important;
+
+}
+
+/* =========================================================
+   SCORE GUIDE
+========================================================= */
+
+.score-guide {
+
+    display:
+        flex;
+
+    gap:
+        7px;
+
+    flex-wrap:
+        wrap;
+
+    margin-top:
+        10px;
+}
+
+.score-guide span {
+
+    display:
+        inline-flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        center;
+
+    min-width:
+        30px;
+
+    height:
+        27px;
+
+    border-radius:
+        7px;
+
+    background:
+        #eef2f7;
+
+    color:
+        #586273;
+
+    font-size:
+        11px;
+
+    font-weight:
+        700;
+}
+
+.score-guide span.active {
+
+    background:
+        var(--gf-blue);
+
+    color:
+        #ffffff;
+}
+
+/* =========================================================
+   LATEST VALUE BOX
+========================================================= */
+
+.latest-box {
+
+    display:
+        none;
+
+    background:
+        linear-gradient(
+            135deg,
+            #f7faff,
+            #eef5ff
+        );
+
+    border:
+        1px solid #dbe7f8;
+
+    border-radius:
+        14px;
+
+    padding:
+        16px;
+
+    margin-top:
+        16px;
+}
+
+.latest-box.show {
+
+    display:
+        block;
+}
+
+.latest-title {
+
+    color:
+        var(--gf-blue-dark);
+
+    font-size:
+        12px;
+
+    font-weight:
+        700;
+
+    margin-bottom:
+        8px;
+}
+
+.latest-content {
+
+    display:
+        flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        space-between;
+
+    gap:
+        12px;
+
+}
+
+.latest-score {
+
+    width:
+        48px;
+
+    height:
+        48px;
+
+    display:
+        flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        center;
+
+    border-radius:
+        12px;
+
+    background:
+        var(--gf-blue);
+
+    color:
+        #ffffff;
+
+    font-size:
+        19px;
+
+    font-weight:
+        750;
+
+}
+
+.latest-info {
+
+    flex:
+        1;
+}
+
+.latest-info strong {
+
+    display:
+        block;
+
+    color:
+        var(--gf-text);
+
+    font-size:
+        12px;
+
+}
+
+.latest-info span {
+
+    display:
+        block;
+
+    color:
+        var(--gf-muted);
+
+    font-size:
+        11px;
+
+    margin-top:
+        3px;
+
+}
 
 /* =========================================================
    BUTTON
 ========================================================= */
 
-.btn-primary {
+.btn-gf {
+
+    display:
+        inline-flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        center;
+
+    gap:
+        7px;
 
     background:
-        var(--gf-blue-dark) !important;
+        var(--gf-blue);
 
-    border-color:
-        var(--gf-blue-dark) !important;
-
-    font-weight: 600;
-
-    border-radius: 9px;
-
-    padding: 10px 20px;
-
-    font-size: 13px;
-
-}
-
-
-.btn-primary:hover {
-
-    background:
-        var(--gf-blue-hover) !important;
-
-    border-color:
-        var(--gf-blue-hover) !important;
-
-}
-
-
-/* =========================================================
-   SECONDARY BUTTON
-========================================================= */
-
-.btn-light {
-
-    border-color:
-        #dbe2ef !important;
+    border:
+        1px solid var(--gf-blue);
 
     color:
-        #536174 !important;
-
-    background:
-        #ffffff !important;
+        #ffffff;
 
     border-radius:
-        9px;
+        10px;
+
+    padding:
+        11px 21px;
 
     font-size:
         13px;
 
+    font-weight:
+        650;
+
+    transition:
+        .2s ease;
+
 }
 
-
-.btn-light:hover {
+.btn-gf:hover {
 
     background:
-        #f7f9fc !important;
+        var(--gf-blue-hover);
+
+    border-color:
+        var(--gf-blue-hover);
+
+    color:
+        #ffffff;
+
+    transform:
+        translateY(-1px);
 
 }
 
+.btn-secondary-custom {
+
+    background:
+        #f2f4f8;
+
+    border:
+        1px solid #e1e6ee;
+
+    color:
+        #596579;
+
+    border-radius:
+        10px;
+
+    padding:
+        11px 18px;
+
+    font-size:
+        13px;
+
+    font-weight:
+        600;
+
+}
+
+.btn-secondary-custom:hover {
+
+    background:
+        #e8ecf2;
+
+    color:
+        #354052;
+
+}
+
+/* =========================================================
+   ALERT
+========================================================= */
+
+.alert-custom {
+
+    border:
+        0;
+
+    border-radius:
+        12px;
+
+    font-size:
+        12px;
+
+}
+
+/* =========================================================
+   HISTORY HEADER
+========================================================= */
+
+.history-header {
+
+    display:
+        flex;
+
+    justify-content:
+        space-between;
+
+    align-items:
+        center;
+
+    gap:
+        10px;
+
+    flex-wrap:
+        wrap;
+
+    margin-bottom:
+        18px;
+
+}
+
+.history-count {
+
+    background:
+        #f0f3f7;
+
+    color:
+        #667184;
+
+    border-radius:
+        20px;
+
+    padding:
+        6px 10px;
+
+    font-size:
+        11px;
+
+    font-weight:
+        650;
+}
 
 /* =========================================================
    TABLE
@@ -982,276 +1540,239 @@ if (
 
 .table-custom {
 
-    margin-bottom: 0;
+    margin:
+        0;
 
-    min-width: 900px;
-
-}
-
-
-.table-responsive {
-
-    border-radius: 11px;
+    vertical-align:
+        middle;
 
 }
-
 
 .table-custom thead th {
 
-    border-top: 0;
-
-    border-bottom:
-        1px solid #e3e8ef;
-
-    color: #7d8796;
-
-    font-size: 10px;
-
-    font-weight: 750;
-
-    text-transform: uppercase;
-
-    letter-spacing: .05em;
-
-    padding: 12px 10px;
-
     background:
-        #fafbfd;
+        var(--gf-blue-light);
 
-    white-space: nowrap;
+    color:
+        var(--gf-blue-dark);
+
+    font-size:
+        10px;
+
+    font-weight:
+        750;
+
+    text-transform:
+        uppercase;
+
+    letter-spacing:
+        .04em;
+
+    white-space:
+        nowrap;
+
+    padding:
+        12px 14px;
+
+    border:
+        0;
 
 }
 
-
 .table-custom tbody td {
+
+    color:
+        var(--gf-text);
+
+    font-size:
+        12px;
+
+    padding:
+        13px 14px;
 
     border-bottom:
         1px solid #edf0f4;
 
-    color: #384457;
-
-    font-size: 12px;
-
-    padding: 13px 10px;
-
-    vertical-align: middle;
-
 }
-
 
 .table-custom tbody tr:hover {
 
     background:
-        #fafbfd;
+        #fafcff;
 
 }
-
 
 .table-custom tbody tr:last-child td {
 
-    border-bottom: 0;
+    border-bottom:
+        0;
 
 }
-
 
 /* =========================================================
-   BADGE NILAI
+   SCORE BADGE
 ========================================================= */
 
-.score-badge {
+.badge-score {
 
-    display: inline-flex;
+    display:
+        inline-flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    justify-content: center;
+    justify-content:
+        center;
 
-    width: 30px;
+    min-width:
+        38px;
 
-    height: 30px;
+    height:
+        29px;
 
-    border-radius: 8px;
+    border-radius:
+        8px;
 
-    font-weight: 750;
+    font-size:
+        12px;
 
-    font-size: 12px;
+    font-weight:
+        750;
 
 }
 
-
-.score-1 {
+.badge-score.low {
 
     background:
-        #ffecee;
+        var(--gf-red-bg);
 
     color:
-        #dc3545;
-
+        var(--gf-red);
 }
 
-
-.score-2 {
+.badge-score.mid {
 
     background:
-        #fff4d8;
+        var(--gf-yellow-bg);
 
     color:
-        #b77900;
-
+        var(--gf-yellow);
 }
 
-
-.score-3 {
+.badge-score.high {
 
     background:
-        #eaf2ff;
+        var(--gf-green-bg);
 
     color:
-        #123f7a;
-
+        var(--gf-green);
 }
-
-
-.score-4 {
-
-    background:
-        #e9f8f0;
-
-    color:
-        #198754;
-
-}
-
-
-.score-5 {
-
-    background:
-        #d1e7dd;
-
-    color:
-        #0f5132;
-
-}
-
 
 /* =========================================================
-   WORKER BADGE
+   LATEST BADGE
 ========================================================= */
 
-.worker-id {
+.latest-badge {
 
-    display: inline-flex;
+    display:
+        inline-flex;
 
-    align-items: center;
+    align-items:
+        center;
 
-    padding: 4px 7px;
+    gap:
+        4px;
 
-    border-radius: 6px;
+    padding:
+        4px 7px;
+
+    border-radius:
+        6px;
 
     background:
-        #f4f6f9;
-
-    border:
-        1px solid #e2e6ec;
+        var(--gf-green-bg);
 
     color:
-        #596579;
+        var(--gf-green);
 
-    font-size: 10px;
+    font-size:
+        9px;
 
-    font-weight: 700;
+    font-weight:
+        700;
+
+    margin-left:
+        5px;
 
 }
 
-
 /* =========================================================
-   INFO BOX
+   WORKER
 ========================================================= */
 
-.assessment-info {
+.worker-name {
 
-    display: flex;
+    font-weight:
+        700;
 
-    align-items: flex-start;
+    color:
+        var(--gf-text);
 
-    gap: 10px;
+}
+
+.worker-meta {
+
+    color:
+        var(--gf-muted);
+
+    font-size:
+        10px;
+
+    margin-top:
+        3px;
+
+    line-height:
+        1.5;
+
+}
+
+/* =========================================================
+   YEAR
+========================================================= */
+
+.year-badge {
+
+    display:
+        inline-flex;
+
+    align-items:
+        center;
+
+    justify-content:
+        center;
+
+    min-width:
+        48px;
+
+    padding:
+        5px 8px;
+
+    border-radius:
+        7px;
 
     background:
-        #f3f7fd;
-
-    border:
-        1px solid #dce8f8;
-
-    border-radius: 10px;
-
-    padding: 11px 13px;
-
-    margin-bottom: 20px;
+        #f0f3f8;
 
     color:
-        #536b8c;
+        #536074;
 
-    font-size: 11px;
+    font-size:
+        11px;
 
-    line-height: 1.5;
-
-}
-
-
-.assessment-info i {
-
-    color:
-        var(--gf-blue);
-
-    font-size: 15px;
-
-    margin-top: 1px;
+    font-weight:
+        700;
 
 }
-
-
-/* =========================================================
-   FORM ACTION
-========================================================= */
-
-.form-action {
-
-    border-top:
-        1px solid #edf0f4;
-
-    padding-top:
-        18px;
-
-}
-
-
-/* =========================================================
-   EMPTY TABLE
-========================================================= */
-
-.empty-history {
-
-    text-align: center;
-
-    padding: 40px 20px !important;
-
-    color: #8a94a4 !important;
-
-}
-
-
-.empty-history i {
-
-    font-size: 30px;
-
-    display: block;
-
-    margin-bottom: 10px;
-
-    color: #b2bbc8;
-
-}
-
 
 /* =========================================================
    RESPONSIVE
@@ -1259,111 +1780,51 @@ if (
 
 @media (max-width: 768px) {
 
-    .page-hero {
+    .page-wrapper {
 
-        min-height: 145px;
-
-        padding: 22px 20px;
-
-        border-radius: 15px;
+        padding:
+            15px;
 
     }
 
+    .hero-card {
 
-    .page-hero-title {
+        padding:
+            22px;
 
-        font-size: 23px;
-
-    }
-
-
-    .page-hero-description {
-
-        font-size: 12px;
-
-        max-width: 90%;
+        border-radius:
+            15px;
 
     }
 
+    .hero-card h1 {
 
-    .page-hero-circle-1 {
-
-        right: -35px;
-
-    }
-
-
-    .page-hero-circle-3 {
-
-        display: none;
+        font-size:
+            23px;
 
     }
 
+    .card-custom {
 
-    .cardx {
+        padding:
+            17px;
 
-        padding: 17px;
-
-        border-radius: 14px;
-
-    }
-
-
-    .dashboard-title {
-
-        font-size: 23px;
+        border-radius:
+            14px;
 
     }
 
+    .card-header-custom {
 
-    .search-select-dropdown {
-
-        max-height: 220px;
-
-    }
-
-}
-
-
-/* =========================================================
-   SMALL MOBILE
-========================================================= */
-
-@media (max-width: 480px) {
-
-    .page-hero {
-
-        padding: 20px 18px;
+        align-items:
+            flex-start;
 
     }
 
+    .table-custom {
 
-    .page-hero-eyebrow {
-
-        font-size: 10px;
-
-    }
-
-
-    .page-hero-title {
-
-        font-size: 21px;
-
-    }
-
-
-    .page-hero-description {
-
-        font-size: 11px;
-
-        max-width: 95%;
-
-    }
-
-
-    .cardx {
-
-        padding: 15px;
+        min-width:
+            900px;
 
     }
 
@@ -1371,724 +1832,830 @@ if (
 
 </style>
 
+<div class="page-wrapper">
 
-<!-- =======================================================
-     HEADER / BLUE HERO CARD
-======================================================= -->
+    <!-- =====================================================
+         HERO
+    ====================================================== -->
 
-<div class="page-hero">
+    <div class="hero-card">
 
-    <!-- DECORATION -->
-
-    <div
-        class="page-hero-circle-1"
-    ></div>
-
-    <div
-        class="page-hero-circle-2"
-    ></div>
-
-    <div
-        class="page-hero-circle-3"
-    ></div>
-
-
-    <!-- CONTENT -->
-
-    <div class="page-hero-content">
-
-        <div class="page-hero-eyebrow">
-
-            <i
-                class="bi bi-award-fill"
-            ></i>
+        <div class="eyebrow">
 
             GARUDAFOOD • TEKNIK
 
         </div>
 
-
-        <h1 class="page-hero-title">
+        <h1>
 
             Penilaian Skill
 
         </h1>
 
+        <p>
 
-        <div class="page-hero-description">
+            Tambahkan nilai kompetensi terbaru pekerja
+            tanpa menghapus atau menimpa history penilaian sebelumnya.
 
-            Lakukan input atau pembaruan nilai kompetensi
-            pekerja secara berkala berdasarkan hasil assessment.
+        </p>
+
+    </div>
+
+    <!-- =====================================================
+         SUCCESS
+    ====================================================== -->
+
+    <?php if ($success !== ''): ?>
+
+        <div
+            class="
+                alert
+                alert-success
+                alert-custom
+                alert-dismissible
+                fade
+                show
+                mb-4
+            "
+            role="alert"
+        >
+
+            <i class="bi bi-check-circle-fill me-2"></i>
+
+            <?= e($success) ?>
+
+            <button
+                type="button"
+                class="btn-close"
+                data-bs-dismiss="alert"
+            ></button>
 
         </div>
 
-    </div>
+    <?php endif; ?>
 
-</div>
+    <!-- =====================================================
+         ERROR
+    ====================================================== -->
 
+    <?php if ($error !== ''): ?>
 
-<!-- =======================================================
-     SUCCESS
-======================================================= -->
-
-<?php if (isset($_GET['saved'])): ?>
-
-    <div
-        class="
-            alert
-            alert-success
-            alert-dismissible
-            fade
-            show
-            border-0
-            shadow-sm
-            mb-4
-        "
-        role="alert"
-        style="
-            border-radius:12px;
-            background:#e9f8f0;
-            color:#0f5132;
-        "
-    >
-
-        <i
-            class="bi bi-check-circle-fill me-2"
-        ></i>
-
-        Nilai skill berhasil diperbarui.
-        History tahun sebelumnya tetap tersimpan.
-
-        <button
-            type="button"
-            class="btn-close"
-            data-bs-dismiss="alert"
-            aria-label="Close"
-        ></button>
-
-    </div>
-
-<?php endif; ?>
-
-
-<!-- =======================================================
-     ERROR
-======================================================= -->
-
-<?php if ($error_message !== ''): ?>
-
-    <div
-        class="
-            alert
-            alert-danger
-            alert-dismissible
-            fade
-            show
-            border-0
-            shadow-sm
-            mb-4
-        "
-        role="alert"
-        style="
-            border-radius:12px;
-        "
-    >
-
-        <i
+        <div
             class="
-                bi
-                bi-exclamation-triangle-fill
-                me-2
+                alert
+                alert-danger
+                alert-custom
+                alert-dismissible
+                fade
+                show
+                mb-4
             "
-        ></i>
+            role="alert"
+        >
 
-        <?= e($error_message) ?>
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
 
-        <button
-            type="button"
-            class="btn-close"
-            data-bs-dismiss="alert"
-            aria-label="Close"
-        ></button>
+            <strong>Gagal:</strong>
 
-    </div>
+            <?= e($error) ?>
 
-<?php endif; ?>
-
-
-<!-- =======================================================
-     FORM INPUT / UPDATE
-======================================================= -->
-
-<div class="cardx">
-
-    <div class="card-title-custom">
-
-        <i
-            class="
-                bi
-                bi-pencil-square
-            "
-        ></i>
-
-        Update Nilai Skill Terbaru
-
-    </div>
-
-
-    <div class="assessment-info">
-
-        <i
-            class="
-                bi
-                bi-info-circle-fill
-            "
-        ></i>
-
-        <div>
-
-            Pilih pekerja dan skill yang akan dinilai.
-            Jika kombinasi pekerja, skill, dan tahun sudah
-            memiliki data, nilai tersebut akan diperbarui.
-            Data dari tahun sebelumnya tetap tersimpan sebagai history.
+            <button
+                type="button"
+                class="btn-close"
+                data-bs-dismiss="alert"
+            ></button>
 
         </div>
 
-    </div>
+    <?php endif; ?>
 
+    <!-- =====================================================
+         TAMBAH NILAI TERBARU
+    ====================================================== -->
 
-    <form
-        method="post"
-        class="row g-3"
-        id="penilaianForm"
-    >
+    <div class="card-custom">
 
+        <div class="card-header-custom">
 
-        <!-- =================================================
-             PEKERJA
-        ================================================== -->
+            <div>
 
-        <div class="col-md-5">
+                <div class="card-title-custom">
 
-            <label class="form-label">
+                    <i class="bi bi-plus-circle-fill me-2"></i>
 
-                Pekerja
+                    Tambah Nilai Terbaru
 
-            </label>
+                </div>
 
+                <div class="card-description">
 
-            <div
-                class="search-select"
-                id="workerSearch"
-            >
-
-                <input
-                    type="hidden"
-                    name="id_pekerja"
-                    id="id_pekerja"
-                    value=""
-                >
-
-
-                <input
-                    type="text"
-                    id="workerSearchInput"
-                    class="form-control search-select-input"
-                    placeholder="Ketik nama pekerja..."
-                    autocomplete="off"
-                >
-
-
-                <button
-                    type="button"
-                    class="search-clear"
-                    id="workerClear"
-                    title="Hapus pilihan"
-                >
-
-                    <i
-                        class="bi bi-x"
-                    ></i>
-
-                </button>
-
-
-                <div
-                    class="search-select-dropdown"
-                    id="workerDropdown"
-                >
-
-                    <?php if (
-                        $people &&
-                        $people->num_rows > 0
-                    ): ?>
-
-                        <?php while (
-                            $p =
-                                $people->fetch_assoc()
-                        ): ?>
-
-                            <div
-                                class="
-                                    search-option
-                                    worker-option
-                                "
-                                data-id="<?= (int)$p['id'] ?>"
-                                data-name="<?= e($p['nama']) ?>"
-                                data-search="<?= e(
-                                    strtolower(
-                                        $p['nama'] . ' ' .
-                                        ($p['no_reg'] ?? '') . ' ' .
-                                        ($p['departemen'] ?? '')
-                                    )
-                                ) ?>"
-                            >
-
-                                <div
-                                    class="
-                                        search-option-name
-                                    "
-                                >
-
-                                    <?= e(
-                                        $p['nama']
-                                    ) ?>
-
-                                </div>
-
-
-                                <div
-                                    class="
-                                        search-option-meta
-                                    "
-                                >
-
-                                    <?php if (
-                                        !empty(
-                                            $p['no_reg']
-                                        )
-                                    ): ?>
-
-                                        No. Reg:
-
-                                        <?= e(
-                                            $p['no_reg']
-                                        ) ?>
-
-                                    <?php endif; ?>
-
-
-                                    <?php if (
-                                        !empty(
-                                            $p['departemen']
-                                        )
-                                    ): ?>
-
-                                        &nbsp; • &nbsp;
-
-                                        <?= e(
-                                            $p['departemen']
-                                        ) ?>
-
-                                    <?php endif; ?>
-
-                                </div>
-
-                            </div>
-
-                        <?php endwhile; ?>
-
-                    <?php else: ?>
-
-                        <div
-                            class="
-                                search-option-empty
-                            "
-                        >
-
-                            Tidak ada pekerja aktif.
-
-                        </div>
-
-                    <?php endif; ?>
+                    Masukkan hasil penilaian terbaru.
+                    Nilai lama tidak akan dihapus.
 
                 </div>
 
             </div>
 
-        </div>
+            <div class="badge-new">
 
+                <i class="bi bi-stars"></i>
 
-        <!-- =================================================
-             SKILL
-        ================================================== -->
-
-        <div class="col-md-5">
-
-            <label class="form-label">
-
-                Skill
-
-            </label>
-
-
-            <div
-                class="search-select"
-                id="skillSearch"
-            >
-
-                <input
-                    type="hidden"
-                    name="id_skill"
-                    id="id_skill"
-                    value=""
-                >
-
-
-                <input
-                    type="text"
-                    id="skillSearchInput"
-                    class="form-control search-select-input"
-                    placeholder="Ketik nama skill..."
-                    autocomplete="off"
-                >
-
-
-                <button
-                    type="button"
-                    class="search-clear"
-                    id="skillClear"
-                    title="Hapus pilihan"
-                >
-
-                    <i
-                        class="bi bi-x"
-                    ></i>
-
-                </button>
-
-
-                <div
-                    class="search-select-dropdown"
-                    id="skillDropdown"
-                >
-
-                    <?php if (
-                        $skills &&
-                        $skills->num_rows > 0
-                    ): ?>
-
-                        <?php while (
-                            $s =
-                                $skills->fetch_assoc()
-                        ): ?>
-
-                            <div
-                                class="
-                                    search-option
-                                    skill-option
-                                "
-                                data-id="<?= (int)$s['id'] ?>"
-                                data-name="<?= e(
-                                    $s['nama_skill']
-                                ) ?>"
-                                data-search="<?= e(
-                                    strtolower(
-                                        $s['nama_skill']
-                                    )
-                                ) ?>"
-                            >
-
-                                <div
-                                    class="
-                                        search-option-name
-                                    "
-                                >
-
-                                    <?= e(
-                                        $s['nama_skill']
-                                    ) ?>
-
-                                </div>
-
-                            </div>
-
-                        <?php endwhile; ?>
-
-                    <?php else: ?>
-
-                        <div
-                            class="
-                                search-option-empty
-                            "
-                        >
-
-                            Tidak ada skill aktif.
-
-                        </div>
-
-                    <?php endif; ?>
-
-                </div>
+                Penilaian Baru
 
             </div>
 
         </div>
 
+        <form
+            method="POST"
+            action=""
+            id="assessmentForm"
+        >
 
-        <!-- =================================================
-             TAHUN
-        ================================================== -->
+            <div class="row g-4">
 
-        <div class="col-md-2">
+                <!-- =================================================
+                     PEKERJA
+                ================================================== -->
 
-            <label class="form-label">
+                <div class="col-lg-6">
 
-                Tahun
+                    <label class="form-label">
+                        Pekerja
+                        <span class="required">*</span>
+                    </label>
 
-            </label>
+                    <?php
+                    $selectedWorkerId = isset($_POST['id_pekerja'])
+                        ? (int)$_POST['id_pekerja']
+                        : 0;
 
+                    $selectedWorker = null;
 
-            <input
-                name="tahun"
-                type="number"
-                min="2020"
-                max="2100"
-                value="<?= date('Y') ?>"
-                class="form-control"
-                required
-            >
+                    foreach ($workers as $worker) {
+                        if ((int)$worker['id'] === $selectedWorkerId) {
+                            $selectedWorker = $worker;
+                            break;
+                        }
+                    }
+                    ?>
 
-        </div>
-
-
-        <!-- =================================================
-             NILAI
-        ================================================== -->
-
-        <div class="col-md-2">
-
-            <label class="form-label">
-
-                Nilai (1-5)
-
-            </label>
-
-
-            <select
-                name="nilai"
-                class="form-select"
-                required
-            >
-
-                <?php for (
-                    $i = 1;
-                    $i <= 5;
-                    $i++
-                ): ?>
-
-                    <option
-                        value="<?= $i ?>"
+                    <div
+                        class="picker <?= $selectedWorker ? 'has-value' : '' ?>"
+                        id="workerPicker"
                     >
 
-                        <?= $i ?>
+                        <input
+                            type="hidden"
+                            name="id_pekerja"
+                            id="id_pekerja"
+                            value="<?= $selectedWorker ? (int)$selectedWorker['id'] : '' ?>"
+                        >
 
-                    </option>
+                        <div class="picker-control">
 
-                <?php endfor; ?>
+                            <i class="bi bi-search picker-icon"></i>
 
-            </select>
+                            <input
+                                type="text"
+                                class="form-control picker-input <?= $selectedWorker ? 'is-selected' : '' ?>"
+                                id="workerPickerInput"
+                                placeholder="Cari & pilih pekerja..."
+                                autocomplete="off"
+                                value="<?= $selectedWorker
+                                    ? e(
+                                        $selectedWorker['nama'] .
+                                        ' - ' .
+                                        $selectedWorker['no_reg']
+                                    )
+                                    : '' ?>"
+                            >
+
+                            <button
+                                type="button"
+                                class="picker-selected-clear"
+                                id="workerPickerClear"
+                                aria-label="Hapus pilihan pekerja"
+                            >
+                                <i class="bi bi-x-circle-fill"></i>
+                            </button>
+
+                            <i class="bi bi-chevron-down picker-arrow"></i>
+
+                        </div>
+
+                        <div class="picker-dropdown" id="workerPickerDropdown">
+
+                            <?php foreach ($workers as $worker): ?>
+
+                                <button
+                                    type="button"
+                                    class="picker-option"
+                                    data-id="<?= (int)$worker['id'] ?>"
+                                    data-search="<?= e(
+                                        $worker['nama'] . ' ' .
+                                        $worker['no_reg'] . ' ' .
+                                        $worker['departemen'] . ' ' .
+                                        $worker['keterangan']
+                                    ) ?>"
+                                    data-label="<?= e(
+                                        $worker['nama'] .
+                                        ' - ' .
+                                        $worker['no_reg']
+                                    ) ?>"
+                                >
+                                    <span class="picker-option-name">
+                                        <?= e($worker['nama']) ?>
+                                    </span>
+
+                                    <span class="picker-option-meta">
+                                        No. Reg: <?= e($worker['no_reg'] ?: '-') ?>
+
+                                        <?php if (!empty($worker['departemen'])): ?>
+                                            • <?= e($worker['departemen']) ?>
+                                        <?php endif; ?>
+
+                                        <?php if (!empty($worker['keterangan'])): ?>
+                                            • <?= e($worker['keterangan']) ?>
+                                        <?php endif; ?>
+                                    </span>
+                                </button>
+
+                            <?php endforeach; ?>
+
+                            <div
+                                class="picker-empty"
+                                id="workerPickerEmpty"
+                                style="display:none;"
+                            >
+                                Pekerja tidak ditemukan.
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                    <div class="form-help">
+                        Ketik nama, No. Reg, departemen, atau keterangan untuk mencari pekerja.
+                    </div>
+
+                    <!-- NILAI TERAKHIR -->
+
+                    <div
+                        class="latest-box"
+                        id="latestBox"
+                    >
+
+                        <div class="latest-title">
+                            <i class="bi bi-clock-history me-1"></i>
+                            Nilai Terakhir Pekerja
+                        </div>
+
+                        <div class="latest-content">
+
+                            <div
+                                class="latest-score"
+                                id="latestScore"
+                            >
+                                -
+                            </div>
+
+                            <div class="latest-info">
+
+                                <strong id="latestSkill">
+                                    Pilih skill terlebih dahulu
+                                </strong>
+
+                                <span id="latestDetail">
+                                    -
+                                </span>
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+                <!-- =================================================
+                     SKILL
+                ================================================== -->
+
+                <div class="col-lg-6">
+
+                    <label class="form-label">
+                        Skill / Kompetensi
+                        <span class="required">*</span>
+                    </label>
+
+                    <?php
+                    $selectedSkillId = isset($_POST['id_skill'])
+                        ? (int)$_POST['id_skill']
+                        : 0;
+
+                    $selectedSkill = null;
+
+                    foreach ($skills as $skill) {
+                        if ((int)$skill['id'] === $selectedSkillId) {
+                            $selectedSkill = $skill;
+                            break;
+                        }
+                    }
+                    ?>
+
+                    <div
+                        class="picker <?= $selectedSkill ? 'has-value' : '' ?>"
+                        id="skillPicker"
+                    >
+
+                        <input
+                            type="hidden"
+                            name="id_skill"
+                            id="id_skill"
+                            value="<?= $selectedSkill ? (int)$selectedSkill['id'] : '' ?>"
+                        >
+
+                        <div class="picker-control">
+
+                            <i class="bi bi-search picker-icon"></i>
+
+                            <input
+                                type="text"
+                                class="form-control picker-input <?= $selectedSkill ? 'is-selected' : '' ?>"
+                                id="skillPickerInput"
+                                placeholder="Cari & pilih skill..."
+                                autocomplete="off"
+                                value="<?= $selectedSkill
+                                    ? e($selectedSkill['nama_skill'])
+                                    : '' ?>"
+                            >
+
+                            <button
+                                type="button"
+                                class="picker-selected-clear"
+                                id="skillPickerClear"
+                                aria-label="Hapus pilihan skill"
+                            >
+                                <i class="bi bi-x-circle-fill"></i>
+                            </button>
+
+                            <i class="bi bi-chevron-down picker-arrow"></i>
+
+                        </div>
+
+                        <div class="picker-dropdown" id="skillPickerDropdown">
+
+                            <?php foreach ($skills as $skill): ?>
+
+                                <button
+                                    type="button"
+                                    class="picker-option"
+                                    data-id="<?= (int)$skill['id'] ?>"
+                                    data-search="<?= e($skill['nama_skill']) ?>"
+                                    data-label="<?= e($skill['nama_skill']) ?>"
+                                >
+                                    <span class="picker-option-name">
+                                        <?= e($skill['nama_skill']) ?>
+                                    </span>
+
+                                    <span class="picker-option-meta">
+                                        Skill / Kompetensi Aktif
+                                    </span>
+                                </button>
+
+                            <?php endforeach; ?>
+
+                            <div
+                                class="picker-empty"
+                                id="skillPickerEmpty"
+                                style="display:none;"
+                            >
+                                Skill tidak ditemukan.
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                    <div class="form-help">
+                        Ketik nama skill untuk mencari dan memilih kompetensi.
+                    </div>
+
+                </div>
+
+                <!-- =================================================
+                     TAHUN
+                ================================================== -->
+
+
+                <div class="col-md-4">
+
+                    <label class="form-label">
+
+                        Tahun Penilaian
+
+                        <span class="required">*</span>
+
+                    </label>
+
+                    <input
+                        type="number"
+                        name="tahun"
+                        id="tahun"
+                        class="form-control"
+                        min="2000"
+                        max="2100"
+                        value="<?= e(
+                            isset($_POST['tahun'])
+                                ? $_POST['tahun']
+                                : date('Y')
+                        ) ?>"
+                        required
+                    >
+
+                    <div class="form-help">
+
+                        Tahun penilaian terbaru.
+
+                    </div>
+
+                </div>
+
+                <!-- =================================================
+                     NILAI
+                ================================================== -->
+
+                <div class="col-md-4">
+
+                    <div class="score-box">
+
+                        <div class="score-box-label">
+
+                            Nilai Skill
+
+                            <span class="required">*</span>
+
+                        </div>
+
+                        <input
+                            type="number"
+                            name="nilai"
+                            id="nilai"
+                            class="form-control score-input"
+                            min="1"
+                            max="5"
+                            step="1"
+                            value="<?= e(
+                                isset($_POST['nilai'])
+                                    ? $_POST['nilai']
+                                    : ''
+                            ) ?>"
+                            placeholder="1 - 5"
+                            required
+                        >
+
+                        <div class="score-guide">
+
+                            <span data-score="1">1</span>
+
+                            <span data-score="2">2</span>
+
+                            <span data-score="3">3</span>
+
+                            <span data-score="4">4</span>
+
+                            <span data-score="5">5</span>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+                <!-- =================================================
+                     TANGGAL
+                ================================================== -->
+
+                <div class="col-md-4">
+
+                    <label class="form-label">
+
+                        Tanggal Penilaian
+
+                        <span class="required">*</span>
+
+                    </label>
+
+                    <input
+                        type="date"
+                        name="tanggal_penilaian"
+                        id="tanggal_penilaian"
+                        class="form-control"
+                        value="<?= e(
+                            isset($_POST['tanggal_penilaian'])
+                                ? $_POST['tanggal_penilaian']
+                                : date('Y-m-d')
+                        ) ?>"
+                        required
+                    >
+
+                    <div class="form-help">
+
+                        Tanggal dilakukan penilaian.
+
+                    </div>
+
+                </div>
+
+                <!-- =================================================
+                     ASSESSOR
+                ================================================== -->
+
+                <div class="col-md-6">
+
+                    <label class="form-label">
+
+                        Assessor
+
+                        <span class="required">*</span>
+
+                    </label>
+
+                    <input
+                        type="text"
+                        name="assessor"
+                        class="form-control"
+                        value="<?= e(
+                            isset($_POST['assessor'])
+                                ? $_POST['assessor']
+                                : ''
+                        ) ?>"
+                        placeholder="Nama assessor"
+                        required
+                    >
+
+                </div>
+
+                <!-- =================================================
+                     CATATAN
+                ================================================== -->
+
+                <div class="col-md-6">
+
+                    <label class="form-label">
+
+                        Catatan
+
+                    </label>
+
+                    <input
+                        type="text"
+                        name="catatan"
+                        class="form-control"
+                        value="<?= e(
+                            isset($_POST['catatan'])
+                                ? $_POST['catatan']
+                                : ''
+                        ) ?>"
+                        placeholder="Catatan penilaian (opsional)"
+                    >
+
+                </div>
+
+                <!-- =================================================
+                     BUTTON
+                ================================================== -->
+
+                <div class="col-12">
+
+                    <hr
+                        class="my-1"
+                        style="border-color:#edf0f4;"
+                    >
+
+                    <div
+                        class="
+                            d-flex
+                            justify-content-between
+                            align-items-center
+                            flex-wrap
+                            gap-2
+                            mt-3
+                        "
+                    >
+
+                        <div class="form-help m-0">
+
+                            <i class="bi bi-info-circle me-1"></i>
+
+                            Setiap penilaian baru akan tersimpan
+                            sebagai history.
+
+                        </div>
+
+                        <div
+                            class="
+                                d-flex
+                                gap-2
+                            "
+                        >
+
+                            <button
+                                type="reset"
+                                class="btn btn-secondary-custom"
+                                id="resetForm"
+                            >
+
+                                <i class="bi bi-arrow-counterclockwise"></i>
+
+                                Reset
+
+                            </button>
+
+                            <button
+                                type="submit"
+                                class="btn btn-gf"
+                            >
+
+                                <i class="bi bi-plus-circle"></i>
+
+                                Tambah Nilai Terbaru
+
+                            </button>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </form>
+
+    </div>
+
+    <!-- =====================================================
+         HISTORY
+    ====================================================== -->
+
+    <div class="card-custom">
+
+        <div class="history-header">
+
+            <div>
+
+                <div class="card-title-custom">
+
+                    <i class="bi bi-clock-history me-2"></i>
+
+                    History Penilaian
+
+                </div>
+
+                <div class="card-description">
+
+                    Menampilkan penilaian terbaru yang sudah
+                    tersimpan di database.
+
+                </div>
+
+            </div>
+
+            <div class="history-count">
+
+                <?= count($history) ?> data terbaru
+
+            </div>
 
         </div>
 
+        <div class="table-responsive">
 
-        <!-- =================================================
-             TANGGAL
-        ================================================== -->
-
-        <div class="col-md-3">
-
-            <label class="form-label">
-
-                Tanggal Penilaian
-
-            </label>
-
-
-            <input
-                name="tanggal_penilaian"
-                type="date"
-                value="<?= date('Y-m-d') ?>"
-                class="form-control"
-                required
-            >
-
-        </div>
-
-
-        <!-- =================================================
-             ASSESSOR
-        ================================================== -->
-
-        <div class="col-md-4">
-
-            <label class="form-label">
-
-                Assessor
-
-            </label>
-
-
-            <input
-                name="assessor"
-                class="form-control"
-                placeholder="Nama Supervisor / Assessor"
-            >
-
-        </div>
-
-
-        <!-- =================================================
-             CATATAN
-        ================================================== -->
-
-        <div class="col-md-5">
-
-            <label class="form-label">
-
-                Catatan
-
-            </label>
-
-
-            <input
-                name="catatan"
-                class="form-control"
-                placeholder="Catatan atau evaluasi assessment..."
-            >
-
-        </div>
-
-
-        <!-- =================================================
-             BUTTON
-        ================================================== -->
-
-        <div class="col-12">
-
-            <div
+            <table
                 class="
-                    form-action
-                    mt-2
+                    table
+                    table-hover
+                    table-custom
                 "
             >
 
-                <button
-                    type="submit"
-                    class="btn btn-primary"
-                >
+                <thead>
 
-                    <i
-                        class="
-                            bi
-                            bi-save
-                            me-1
-                        "
-                    ></i>
+                    <tr>
 
-                    Simpan Penilaian
+                        <th>
 
-                </button>
+                            Tanggal
 
-            </div>
+                        </th>
 
-        </div>
+                        <th>
 
+                            Pekerja
 
-    </form>
+                        </th>
 
-</div>
+                        <th>
 
+                            Skill
 
-<!-- =======================================================
-     RIWAYAT PENILAIAN
-======================================================= -->
+                        </th>
 
-<div class="cardx">
+                        <th>
 
-    <div class="card-title-custom">
+                            Tahun
 
-        <i
-            class="
-                bi
-                bi-clock-history
-            "
-        ></i>
+                        </th>
 
-        Riwayat Penilaian Terbaru
+                        <th>
 
-    </div>
+                            Nilai
 
+                        </th>
 
-    <div class="table-responsive">
+                        <th>
 
-        <table
-            class="
-                table
-                table-custom
-            "
-        >
+                            Assessor
 
-            <thead>
+                        </th>
 
-                <tr>
+                        <th>
 
-                    <th>
-                        Tanggal
-                    </th>
+                            Catatan
 
-                    <th>
-                        Pekerja
-                    </th>
+                        </th>
 
-                    <th>
-                        Skill
-                    </th>
+                    </tr>
 
-                    <th>
-                        Tahun
-                    </th>
+                </thead>
 
-                    <th>
-                        Nilai
-                    </th>
+                <tbody>
 
-                    <th>
-                        Assessor
-                    </th>
+                <?php if (!empty($history)): ?>
 
-                    <th>
-                        Catatan
-                    </th>
+                    <?php
 
-                </tr>
+                    $historyLatestKey = [];
 
-            </thead>
+                    ?>
 
-
-            <tbody>
-
-                <?php if (
-                    $recent &&
-                    $recent->num_rows > 0
-                ): ?>
-
-
-                    <?php while (
-                        $r =
-                        $recent->fetch_assoc()
+                    <?php foreach (
+                        $history
+                        as $item
                     ): ?>
 
+                        <?php
+
+                        $score =
+                            (int)$item['nilai'];
+
+                        if ($score <= 2) {
+
+                            $scoreClass =
+                                'low';
+
+                        } elseif ($score == 3) {
+
+                            $scoreClass =
+                                'mid';
+
+                        } else {
+
+                            $scoreClass =
+                                'high';
+                        }
+
+                        /*
+                         * Penanda apakah record ini adalah
+                         * penilaian terakhir untuk kombinasi
+                         * pekerja + skill.
+                         */
+
+                        $latestKey =
+                            (int)$item['id_pekerja'] .
+                            '-' .
+                            (int)$item['id_skill'];
+
+                        $isLatest = false;
+
+                        if (
+                            !isset(
+                                $historyLatestKey[
+                                    $latestKey
+                                ]
+                            )
+                        ) {
+
+                            $historyLatestKey[
+                                $latestKey
+                            ] = true;
+
+                            $isLatest = true;
+                        }
+
+                        ?>
 
                         <tr>
 
@@ -2096,598 +2663,683 @@ if (
 
                             <td>
 
-                                <?= e(
-                                    $r['tanggal_penilaian']
-                                    ?: '-'
-                                ) ?>
+                                <div class="fw-semibold">
+
+                                    <?= e(
+                                        $item[
+                                            'tanggal_penilaian'
+                                        ] ?: '-'
+                                    ) ?>
+
+                                </div>
 
                             </td>
-
 
                             <!-- PEKERJA -->
 
                             <td>
 
-                                <div
-                                    class="
-                                        fw-semibold
-                                        text-dark
-                                    "
-                                >
+                                <?php if (
+                                    !empty(
+                                        $item['nama']
+                                    )
+                                ): ?>
 
-                                    <?= e(
-                                        $r['nama']
-                                    ) ?>
+                                    <div
+                                        class="
+                                            worker-name
+                                        "
+                                    >
 
-                                </div>
+                                        <?= e(
+                                            $item['nama']
+                                        ) ?>
 
 
-                                <div
-                                    class="
-                                        mt-1
-                                        d-flex
-                                        align-items-center
-                                        gap-2
-                                        flex-wrap
-                                    "
-                                >
+                                    </div>
 
-                                    <?php if (
-                                        !empty(
-                                            $r['no_reg']
-                                        )
-                                    ): ?>
+                                    <div
+                                        class="
+                                            worker-meta
+                                        "
+                                    >
 
-                                        <span
-                                            class="worker-id"
-                                        >
+                                        No. Reg:
+                                        <?= e(
+                                            $item['no_reg']
+                                        ) ?>
 
-                                            No. Reg:
+                                        <?php if (
+                                            !empty(
+                                                $item[
+                                                    'departemen'
+                                                ]
+                                            )
+                                        ): ?>
 
+                                            •
                                             <?= e(
-                                                $r['no_reg']
+                                                $item[
+                                                    'departemen'
+                                                ]
                                             ) ?>
 
-                                        </span>
+                                        <?php endif; ?>
 
-                                    <?php endif; ?>
+                                        <?php if (
+                                            !empty(
+                                                $item[
+                                                    'keterangan'
+                                                ]
+                                            )
+                                        ): ?>
 
-
-                                    <?php if (
-                                        !empty(
-                                            $r['departemen']
-                                        )
-                                    ): ?>
-
-                                        <small
-                                            class="
-                                                text-muted
-                                            "
-                                        >
-
+                                            •
                                             <?= e(
-                                                $r['departemen']
+                                                $item[
+                                                    'keterangan'
+                                                ]
                                             ) ?>
 
-                                        </small>
+                                        <?php endif; ?>
 
-                                    <?php endif; ?>
+                                    </div>
 
-                                </div>
+                                <?php else: ?>
+
+                                    <span class="text-danger">
+
+                                        Data pekerja tidak ditemukan
+
+                                        (ID:
+                                        <?= (int)
+                                            $item[
+                                                'id_pekerja'
+                                            ]
+                                        ?>
+                                        )
+
+                                    </span>
+
+                                <?php endif; ?>
 
                             </td>
-
 
                             <!-- SKILL -->
 
                             <td>
 
-                                <?= e(
-                                    $r['nama_skill']
-                                ) ?>
+                                <?php if (
+                                    !empty(
+                                        $item[
+                                            'nama_skill'
+                                        ]
+                                    )
+                                ): ?>
+
+                                    <div class="fw-semibold">
+
+                                        <?= e(
+                                            $item[
+                                                'nama_skill'
+                                            ]
+                                        ) ?>
+
+                                    </div>
+
+                                <?php else: ?>
+
+                                    <span class="text-danger">
+
+                                        Skill tidak ditemukan
+
+                                        (ID:
+                                        <?= (int)
+                                            $item[
+                                                'id_skill'
+                                            ]
+                                        ?>
+                                        )
+
+                                    </span>
+
+                                <?php endif; ?>
 
                             </td>
-
 
                             <!-- TAHUN -->
 
                             <td>
 
-                                <?= (int)
-                                    $r['tahun']
-                                ?>
-
-                            </td>
-
-
-                            <!-- NILAI -->
-
-                            <td>
-
-                                <?php
-
-                                $nilaiHistory =
-                                    (int)
-                                    $r['nilai'];
-
-                                $nilaiHistory =
-                                    max(
-                                        1,
-                                        min(
-                                            5,
-                                            $nilaiHistory
-                                        )
-                                    );
-
-                                ?>
-
-
                                 <span
                                     class="
-                                        score-badge
-                                        score-<?= $nilaiHistory ?>
+                                        year-badge
                                     "
                                 >
 
-                                    <?= $nilaiHistory ?>
-
-                                </span>
-
-                            </td>
-
-
-                            <!-- ASSESSOR -->
-
-                            <td>
-
-                                <?= e(
-                                    $r['assessor']
-                                    ?: '-'
-                                ) ?>
-
-                            </td>
-
-
-                            <!-- CATATAN -->
-
-                            <td>
-
-                                <span
-                                    class="text-muted"
-                                >
-
                                     <?= e(
-                                        $r['catatan']
-                                        ?: '-'
+                                        $item['tahun']
                                     ) ?>
 
                                 </span>
 
                             </td>
 
+                            <!-- NILAI -->
+
+                            <td>
+
+                                <span
+                                    class="
+                                        badge-score
+                                        <?= $scoreClass ?>
+                                    "
+                                >
+
+                                    <?= $score ?>
+
+                                </span>
+
+                            </td>
+
+                            <!-- ASSESSOR -->
+
+                            <td>
+
+                                <?= !empty(
+                                    $item['assessor']
+                                )
+                                    ? e(
+                                        $item['assessor']
+                                    )
+                                    : '-'
+                                ?>
+
+                            </td>
+
+                            <!-- CATATAN -->
+
+                            <td>
+
+                                <?php if (
+                                    !empty(
+                                        $item['catatan']
+                                    )
+                                ): ?>
+
+                                    <?= e(
+                                        $item['catatan']
+                                    ) ?>
+
+                                <?php else: ?>
+
+                                    <span
+                                        class="text-muted"
+                                    >
+
+                                        -
+
+                                    </span>
+
+                                <?php endif; ?>
+
+                            </td>
 
                         </tr>
 
-
-                    <?php endwhile; ?>
-
+                    <?php endforeach; ?>
 
                 <?php else: ?>
-
 
                     <tr>
 
                         <td
                             colspan="7"
                             class="
-                                empty-history
+                                text-center
+                                text-muted
+                                py-5
                             "
                         >
 
                             <i
                                 class="
                                     bi
-                                    bi-inbox
+                                    bi-clipboard-x
+                                    d-block
+                                    fs-2
+                                    mb-2
                                 "
                             ></i>
 
-                            Belum ada riwayat
-                            penilaian skill.
+                            Belum ada history penilaian.
 
                         </td>
 
                     </tr>
 
-
                 <?php endif; ?>
 
-            </tbody>
+                </tbody>
 
-        </table>
+            </table>
+
+        </div>
 
     </div>
 
 </div>
 
-
 <script>
 
 /* =========================================================
-   SEARCHABLE SELECT
+   SINGLE SEARCHABLE PICKER
 ========================================================= */
 
-document.addEventListener(
-    'DOMContentLoaded',
-    function () {
+        function setupPicker(config) {
 
-
-        function setupSearchSelect(config) {
-
-            const wrapper =
-                document.getElementById(
-                    config.wrapper
-                );
-
-
-            const input =
-                document.getElementById(
-                    config.input
-                );
-
-
-            const hidden =
-                document.getElementById(
-                    config.hidden
-                );
-
-
-            const dropdown =
-                document.getElementById(
-                    config.dropdown
-                );
-
-
-            const clearButton =
-                document.getElementById(
-                    config.clear
-                );
-
+            const picker = document.getElementById(config.pickerId);
+            const input = document.getElementById(config.inputId);
+            const hidden = document.getElementById(config.hiddenId);
+            const dropdown = document.getElementById(config.dropdownId);
+            const clearButton = document.getElementById(config.clearId);
+            const empty = document.getElementById(config.emptyId);
 
             if (
-                !wrapper ||
+                !picker ||
                 !input ||
                 !hidden ||
                 !dropdown
             ) {
-
-                return;
-
+                return null;
             }
 
+            const options = Array.from(
+                dropdown.querySelectorAll('.picker-option')
+            );
 
-            const options =
-                Array.from(
-                    dropdown.querySelectorAll(
-                        config.optionClass
-                    )
-                );
-
-
-            /* =================================================
-               OPEN
-            ================================================= */
-
-            function openDropdown() {
-
-                wrapper.classList.add(
-                    'open'
-                );
-
+            function openPicker() {
+                picker.classList.add('open');
                 filterOptions();
-
             }
 
-
-            /* =================================================
-               CLOSE
-            ================================================= */
-
-            function closeDropdown() {
-
-                wrapper.classList.remove(
-                    'open'
-                );
-
+            function closePicker() {
+                picker.classList.remove('open');
             }
-
-
-            /* =================================================
-               FILTER
-            ================================================= */
 
             function filterOptions() {
 
-                const keyword =
-                    input.value
-                        .toLowerCase()
-                        .trim();
-
+                const keyword = input.value
+                    .toLowerCase()
+                    .trim();
 
                 let visibleCount = 0;
 
+                options.forEach(function (option) {
 
-                options.forEach(
-                    function (option) {
+                    const text = (
+                        option.textContent +
+                        ' ' +
+                        (option.dataset.search || '')
+                    ).toLowerCase();
 
-                        const searchText =
-                            (
-                                option.dataset.search
-                                || ''
-                            ).toLowerCase();
+                    const matched =
+                        keyword === '' ||
+                        text.includes(keyword);
 
+                    option.style.display =
+                        matched ? '' : 'none';
 
-                        if (
-                            keyword === '' ||
-                            searchText.includes(
-                                keyword
-                            )
-                        ) {
-
-                            option.style.display =
-                                '';
-
-                            visibleCount++;
-
-                        } else {
-
-                            option.style.display =
-                                'none';
-
-                        }
-
-                    }
-                );
-
-
-                let emptyMessage =
-                    dropdown.querySelector(
-                        '.search-no-result'
-                    );
-
-
-                if (
-                    visibleCount === 0 &&
-                    options.length > 0
-                ) {
-
-                    if (!emptyMessage) {
-
-                        emptyMessage =
-                            document.createElement(
-                                'div'
-                            );
-
-                        emptyMessage.className =
-                            'search-option-empty search-no-result';
-
-                        emptyMessage.textContent =
-                            'Data tidak ditemukan.';
-
-                        dropdown.appendChild(
-                            emptyMessage
-                        );
-
+                    if (matched) {
+                        visibleCount++;
                     }
 
+                });
 
-                    emptyMessage.style.display =
-                        '';
-
-                } else if (
-                    emptyMessage
-                ) {
-
-                    emptyMessage.style.display =
-                        'none';
-
+                if (empty) {
+                    empty.style.display =
+                        visibleCount === 0
+                            ? 'block'
+                            : 'none';
                 }
-
             }
 
+            function selectOption(option) {
 
-            /* =================================================
-               PILIH DATA
-            ================================================= */
+                hidden.value = option.dataset.id || '';
+                input.value = option.dataset.label || '';
+                input.classList.add('is-selected');
+                picker.classList.add('has-value');
 
-            options.forEach(
-                function (option) {
+                options.forEach(function (item) {
+                    item.classList.remove('active');
+                });
 
-                    option.addEventListener(
-                        'click',
-                        function () {
+                option.classList.add('active');
 
-                            const id =
-                                option.dataset.id;
+                closePicker();
 
-                            const name =
-                                option.dataset.name;
+                input.dispatchEvent(
+                    new Event('change', {
+                        bubbles: true
+                    })
+                );
+            }
 
+            function clearPicker() {
 
-                            hidden.value =
-                                id;
+                hidden.value = '';
+                input.value = '';
+                input.classList.remove('is-selected');
+                picker.classList.remove('has-value');
 
-                            input.value =
-                                name;
+                options.forEach(function (option) {
+                    option.classList.remove('active');
+                    option.style.display = '';
+                });
 
+                if (empty) {
+                    empty.style.display = 'none';
+                }
 
-                            wrapper.classList.add(
-                                'has-value'
-                            );
+                input.focus();
+            }
 
-
-                            closeDropdown();
-
-                        }
-                    );
-
+            input.addEventListener(
+                'focus',
+                function () {
+                    openPicker();
                 }
             );
 
-
-            /* =================================================
-               KETIK
-            ================================================= */
+            input.addEventListener(
+                'click',
+                function () {
+                    openPicker();
+                }
+            );
 
             input.addEventListener(
                 'input',
                 function () {
 
-                    hidden.value =
-                        '';
+                    /*
+                     * Begitu user mengubah teks pilihan,
+                     * ID lama harus dihapus agar tidak salah kirim.
+                     */
+                    hidden.value = '';
+                    input.classList.remove('is-selected');
+                    picker.classList.remove('has-value');
 
-                    wrapper.classList.remove(
-                        'has-value'
-                    );
+                    options.forEach(function (option) {
+                        option.classList.remove('active');
+                    });
 
-
-                    openDropdown();
-
+                    openPicker();
                 }
             );
 
+            options.forEach(function (option) {
 
-            /* =================================================
-               FOCUS
-            ================================================= */
+                option.addEventListener(
+                    'mousedown',
+                    function (event) {
+                        /*
+                         * Mencegah input kehilangan fokus
+                         * sebelum pilihan diproses.
+                         */
+                        event.preventDefault();
+                    }
+                );
 
-            input.addEventListener(
-                'focus',
-                function () {
+                option.addEventListener(
+                    'click',
+                    function () {
+                        selectOption(option);
+                    }
+                );
 
-                    openDropdown();
-
-                }
-            );
-
-
-            /* =================================================
-               CLEAR
-            ================================================= */
+            });
 
             if (clearButton) {
 
                 clearButton.addEventListener(
-                    'click',
-                    function () {
-
-                        input.value =
-                            '';
-
-                        hidden.value =
-                            '';
-
-                        wrapper.classList.remove(
-                            'has-value'
-                        );
-
-
-                        openDropdown();
-
-                        input.focus();
-
+                    'mousedown',
+                    function (event) {
+                        event.preventDefault();
                     }
                 );
 
+                clearButton.addEventListener(
+                    'click',
+                    function () {
+                        clearPicker();
+                    }
+                );
             }
 
+            /*
+             * Tandai pilihan yang berasal dari POST
+             * ketika halaman kembali setelah validasi gagal.
+             */
+            if (hidden.value !== '') {
 
-            /* =================================================
-               CLICK OUTSIDE
-            ================================================= */
+                const selected =
+                    options.find(function (option) {
+                        return option.dataset.id === hidden.value;
+                    });
+
+                if (selected) {
+                    selected.classList.add('active');
+                }
+
+            }
 
             document.addEventListener(
                 'click',
                 function (event) {
 
-                    if (
-                        !wrapper.contains(
-                            event.target
-                        )
-                    ) {
-
-                        closeDropdown();
-
+                    if (!picker.contains(event.target)) {
+                        closePicker();
                     }
+
+                }
+            );
+
+            return {
+                clear: clearPicker,
+                close: closePicker
+            };
+        }
+
+        const workerPicker = setupPicker({
+            pickerId: 'workerPicker',
+            inputId: 'workerPickerInput',
+            hiddenId: 'id_pekerja',
+            dropdownId: 'workerPickerDropdown',
+            clearId: 'workerPickerClear',
+            emptyId: 'workerPickerEmpty'
+        });
+
+        const skillPicker = setupPicker({
+            pickerId: 'skillPicker',
+            inputId: 'skillPickerInput',
+            hiddenId: 'id_skill',
+            dropdownId: 'skillPickerDropdown',
+            clearId: 'skillPickerClear',
+            emptyId: 'skillPickerEmpty'
+        });
+
+/* =====================================================
+           NILAI GUIDE
+        ===================================================== */
+
+        const nilaiInput =
+            document.getElementById(
+                'nilai'
+            );
+
+        const scoreGuide =
+            document.querySelectorAll(
+                '.score-guide span'
+            );
+
+        function updateScoreGuide() {
+
+            const value =
+                parseInt(
+                    nilaiInput.value,
+                    10
+                );
+
+            scoreGuide.forEach(
+                function (item) {
+
+                    const score =
+                        parseInt(
+                            item.dataset.score,
+                            10
+                        );
+
+                    item.classList.toggle(
+                        'active',
+                        score === value
+                    );
 
                 }
             );
 
         }
 
+        if (nilaiInput) {
+
+            nilaiInput.addEventListener(
+                'input',
+                updateScoreGuide
+            );
+
+            scoreGuide.forEach(
+                function (item) {
+
+                    item.addEventListener(
+                        'click',
+                        function () {
+
+                            nilaiInput.value =
+                                this.dataset.score;
+
+                            updateScoreGuide();
+
+                        }
+                    );
+
+                }
+            );
+
+            updateScoreGuide();
+
+        }
 
         /* =====================================================
-           PEKERJA
-        ===================================================== */
-
-        setupSearchSelect({
-
-            wrapper:
-                'workerSearch',
-
-            input:
-                'workerSearchInput',
-
-            hidden:
-                'id_pekerja',
-
-            dropdown:
-                'workerDropdown',
-
-            clear:
-                'workerClear',
-
-            optionClass:
-                '.worker-option'
-
-        });
-
-
-        /* =====================================================
-           SKILL
-        ===================================================== */
-
-        setupSearchSelect({
-
-            wrapper:
-                'skillSearch',
-
-            input:
-                'skillSearchInput',
-
-            hidden:
-                'id_skill',
-
-            dropdown:
-                'skillDropdown',
-
-            clear:
-                'skillClear',
-
-            optionClass:
-                '.skill-option'
-
-        });
-
-
-        /* =====================================================
-           VALIDASI FORM
+           RESET
         ===================================================== */
 
         const form =
             document.getElementById(
-                'penilaianForm'
+                'assessmentForm'
             );
 
+        const resetButton =
+            document.getElementById(
+                'resetForm'
+            );
+
+        if (
+            resetButton &&
+            form
+        ) {
+
+            resetButton.addEventListener(
+                'click',
+                function () {
+
+                    setTimeout(
+                        function () {
+
+                            const latestBox =
+                                document.getElementById(
+                                    'latestBox'
+                                );
+
+                            if (latestBox) {
+                                latestBox.classList.remove(
+                                    'show'
+                                );
+                            }
+
+                            if (workerPicker) {
+                                workerPicker.clear();
+                            }
+
+                            if (skillPicker) {
+                                skillPicker.clear();
+                            }
+
+                            if (nilaiInput) {
+                                nilaiInput.value = '';
+                                updateScoreGuide();
+                            }
+
+                            /*
+                             * Tetapkan kembali tanggal dan tahun
+                             * ke nilai hari/tahun sekarang.
+                             */
+                            const yearInput =
+                                document.getElementById('tahun');
+
+                            const dateInput =
+                                document.getElementById('tanggal_penilaian');
+
+                            if (yearInput) {
+                                yearInput.value =
+                                    new Date().getFullYear();
+                            }
+
+                            if (dateInput) {
+
+                                const now = new Date();
+
+                                const year =
+                                    now.getFullYear();
+
+                                const month =
+                                    String(
+                                        now.getMonth() + 1
+                                    ).padStart(2, '0');
+
+                                const day =
+                                    String(
+                                        now.getDate()
+                                    ).padStart(2, '0');
+
+                                dateInput.value =
+                                    year + '-' +
+                                    month + '-' +
+                                    day;
+                            }
+
+                        },
+                        10
+                    );
+
+                }
+            );
+
+        }
+
+/* =====================================================
+           FORM VALIDATION
+        ===================================================== */
 
         if (form) {
 
@@ -2695,78 +3347,125 @@ document.addEventListener(
                 'submit',
                 function (event) {
 
-                    const workerId =
+                    const worker =
                         document.getElementById(
                             'id_pekerja'
-                        ).value;
+                        );
 
-
-                    const skillId =
+                    const skill =
                         document.getElementById(
                             'id_skill'
-                        ).value;
+                        );
 
+                    const tahun =
+                        document.getElementById(
+                            'tahun'
+                        );
 
-                    /* =========================================
-                       VALIDASI PEKERJA
-                    ========================================= */
+                    const nilai =
+                        document.getElementById(
+                            'nilai'
+                        );
 
-                    if (
-                        !workerId ||
-                        parseInt(
-                            workerId,
-                            10
-                        ) <= 0
-                    ) {
+                    const tanggal =
+                        document.getElementById(
+                            'tanggal_penilaian'
+                        );
+
+                    if (!worker.value) {
 
                         event.preventDefault();
-
 
                         alert(
                             'Silakan pilih pekerja terlebih dahulu.'
                         );
 
-
-                        document
-                            .getElementById(
-                                'workerSearchInput'
-                            )
-                            .focus();
-
+                        worker.focus();
 
                         return;
-
                     }
 
-
-                    /* =========================================
-                       VALIDASI SKILL
-                    ========================================= */
-
-                    if (
-                        !skillId ||
-                        parseInt(
-                            skillId,
-                            10
-                        ) <= 0
-                    ) {
+                    if (!skill.value) {
 
                         event.preventDefault();
-
 
                         alert(
                             'Silakan pilih skill terlebih dahulu.'
                         );
 
-
-                        document
-                            .getElementById(
-                                'skillSearchInput'
-                            )
-                            .focus();
-
+                        skill.focus();
 
                         return;
+                    }
+
+                    const year =
+                        parseInt(
+                            tahun.value,
+                            10
+                        );
+
+                    if (
+                        isNaN(year) ||
+                        year < 2000 ||
+                        year > 2100
+                    ) {
+
+                        event.preventDefault();
+
+                        alert(
+                            'Tahun penilaian tidak valid.'
+                        );
+
+                        tahun.focus();
+
+                        return;
+                    }
+
+                    const score =
+                        parseInt(
+                            nilai.value,
+                            10
+                        );
+
+                    if (
+                        isNaN(score) ||
+                        score < 1 ||
+                        score > 5
+                    ) {
+
+                        event.preventDefault();
+
+                        alert(
+                            'Nilai harus berupa 1, 2, 3, 4, atau 5.'
+                        );
+
+                        nilai.focus();
+
+                        return;
+                    }
+
+                    if (!tanggal.value) {
+
+                        event.preventDefault();
+
+                        alert(
+                            'Tanggal penilaian wajib diisi.'
+                        );
+
+                        tanggal.focus();
+
+                        return;
+                    }
+
+                    const confirmation =
+                        confirm(
+                            'Tambahkan nilai ini sebagai penilaian terbaru?\\n\\n' +
+                            'Nilai sebelumnya tidak akan dihapus.'
+                        );
+
+                    if (!confirmation) {
+
+                        event.preventDefault();
 
                     }
 
@@ -2775,13 +3474,13 @@ document.addEventListener(
 
         }
 
-    }
-);
-
 </script>
 
-
 <?php
+
+/* =========================================================
+   FOOTER
+========================================================= */
 
 require __DIR__ . '/../partials/footer.php';
 
