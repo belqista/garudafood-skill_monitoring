@@ -592,85 +592,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'edit_training') {
 
         $id_peserta = (int) ($_POST['id_peserta'] ?? 0);
+        $hasil_raw   = trim($_POST['hasil_training'] ?? '');
 
-        $hasil = trim(
-            $_POST['hasil_training'] ?? ''
-        );
 
+        /* -------------------------------------------------
+           VALIDASI INPUT
+        ------------------------------------------------- */
 
         if ($id_peserta <= 0) {
             redirectDetail(
                 $id,
                 'error',
-                'Data training tidak valid.'
+                'Data peserta training tidak valid.'
             );
         }
 
 
-        /* CARI KOLOM HASIL TRAINING */
-
-        $training_columns = [];
-
-        $columns_result = $conn->query("
-            SHOW COLUMNS FROM training_peserta
-        ");
-
-
-        if ($columns_result) {
-
-            while ($column = $columns_result->fetch_assoc()) {
-
-                $training_columns[] =
-                    $column['Field'];
-            }
-        }
-
-
-        $candidate_columns = [
-            'nilai',
-            'hasil',
-            'nilai_training',
-            'score',
-            'hasil_training'
-        ];
-
-
-        $result_column = null;
-
-
-        foreach ($candidate_columns as $candidate) {
-
-            if (
-                in_array(
-                    $candidate,
-                    $training_columns,
-                    true
-                )
-            ) {
-
-                $result_column = $candidate;
-
-                break;
-            }
-        }
-
-
-        if (!$result_column) {
+        if ($hasil_raw === '' || !is_numeric($hasil_raw)) {
             redirectDetail(
                 $id,
                 'error',
-                'Kolom hasil/nilai training tidak ditemukan.'
+                'Nilai training harus berupa angka 1 sampai 5.'
             );
         }
 
 
-        /* CEK PESERTA */
+        $hasil_nilai = (float) $hasil_raw;
+
+
+        if ($hasil_nilai < 1 || $hasil_nilai > 5) {
+            redirectDetail(
+                $id,
+                'error',
+                'Nilai training harus berada antara 1 sampai 5.'
+            );
+        }
+
+
+        /* -------------------------------------------------
+           CEK DATA PESERTA + AMBIL SKILL DARI TRAINING
+
+           training.id_skill menjadi penghubung otomatis:
+           training -> skill -> penilaian_skill
+        ------------------------------------------------- */
 
         $stmt = $conn->prepare("
-            SELECT id
-            FROM training_peserta
-            WHERE id = ?
-              AND id_pekerja = ?
+            SELECT
+                tp.id,
+                tp.id_training,
+                tp.id_pekerja,
+                t.id_skill,
+                t.nama_training,
+                t.tanggal_mulai,
+                t.trainer
+            FROM training_peserta tp
+            INNER JOIN training t
+                ON t.id = tp.id_training
+            WHERE tp.id = ?
+              AND tp.id_pekerja = ?
             LIMIT 1
         ");
 
@@ -679,7 +658,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirectDetail(
                 $id,
                 'error',
-                'Gagal memeriksa data peserta training.'
+                'Gagal mengambil data peserta training: ' . $conn->error
             );
         }
 
@@ -690,73 +669,378 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $id
         );
 
-        $stmt->execute();
 
-        $cek_training =
-            $stmt->get_result()->fetch_assoc();
-
-        $stmt->close();
-
-
-        if (!$cek_training) {
-            redirectDetail(
-                $id,
-                'error',
-                'Data peserta training tidak ditemukan.'
-            );
-        }
-
-
-        $sql = "
-            UPDATE training_peserta
-            SET `$result_column` = ?
-            WHERE id = ?
-              AND id_pekerja = ?
-        ";
-
-
-        $stmt = $conn->prepare($sql);
-
-
-        if (!$stmt) {
-            redirectDetail(
-                $id,
-                'error',
-                'Gagal menyiapkan update training.'
-            );
-        }
-
-
-        $stmt->bind_param(
-            'sii',
-            $hasil,
-            $id_peserta,
-            $id
-        );
-
-
-        if ($stmt->execute()) {
-
+        if (!$stmt->execute()) {
+            $error = $stmt->error;
             $stmt->close();
 
             redirectDetail(
                 $id,
-                'training_updated',
-                'Hasil training berhasil diperbarui.'
+                'error',
+                'Gagal mengambil data training: ' . $error
             );
         }
 
 
-        $error = $stmt->error;
-
+        $training = $stmt->get_result()->fetch_assoc();
         $stmt->close();
 
 
-        redirectDetail(
-            $id,
-            'error',
-            'Gagal memperbarui hasil training: ' . $error
+        if (!$training) {
+            redirectDetail(
+                $id,
+                'error',
+                'Data peserta training tidak ditemukan atau bukan milik pekerja ini.'
+            );
+        }
+
+
+        $id_skill = (int) ($training['id_skill'] ?? 0);
+
+
+        if ($id_skill <= 0) {
+            redirectDetail(
+                $id,
+                'error',
+                'Training "' . $training['nama_training'] . '" belum memiliki skill terkait. Isi id_skill pada tabel training terlebih dahulu.'
+            );
+        }
+
+
+        /* -------------------------------------------------
+           TENTUKAN TAHUN PENILAIAN
+        ------------------------------------------------- */
+
+        $tahun = !empty($training['tanggal_mulai'])
+            ? (int) date(
+                'Y',
+                strtotime($training['tanggal_mulai'])
+            )
+            : (int) date('Y');
+
+
+        if ($tahun < 2000 || $tahun > 2100) {
+            $tahun = (int) date('Y');
+        }
+
+
+        /* -------------------------------------------------
+           CARI KOLOM HASIL TRAINING
+
+           Project saat ini menggunakan hasil_training.
+           Pencarian tetap dipertahankan agar kode aman jika
+           nama kolom pernah berbeda di database.
+        ------------------------------------------------- */
+
+        $training_columns = [];
+
+        $columns_result = $conn->query(
+            "SHOW COLUMNS FROM training_peserta"
         );
+
+
+        if ($columns_result) {
+            while ($column = $columns_result->fetch_assoc()) {
+                $training_columns[] = $column['Field'];
+            }
+        }
+
+
+        $candidate_columns = [
+            'hasil_training',
+            'nilai',
+            'hasil',
+            'nilai_training',
+            'score'
+        ];
+
+
+        $result_column = null;
+
+
+        foreach ($candidate_columns as $candidate) {
+            if (in_array($candidate, $training_columns, true)) {
+                $result_column = $candidate;
+                break;
+            }
+        }
+
+
+        if (!$result_column) {
+            redirectDetail(
+                $id,
+                'error',
+                'Kolom hasil training tidak ditemukan pada tabel training_peserta.'
+            );
+        }
+
+
+        /* -------------------------------------------------
+           MULAI TRANSAKSI
+
+           Supaya update training_peserta dan penilaian_skill
+           berhasil sebagai satu proses.
+        ------------------------------------------------- */
+
+        $conn->begin_transaction();
+
+
+        try {
+
+            /* ---------------------------------------------
+               1. UPDATE HASIL TRAINING
+            --------------------------------------------- */
+
+            $sql = "
+                UPDATE training_peserta
+                SET `$result_column` = ?
+                WHERE id = ?
+                  AND id_pekerja = ?
+            ";
+
+
+            $stmt = $conn->prepare($sql);
+
+
+            if (!$stmt) {
+                throw new Exception(
+                    'Gagal menyiapkan update training: ' . $conn->error
+                );
+            }
+
+
+            $hasil_db = rtrim(
+                rtrim(
+                    number_format(
+                        $hasil_nilai,
+                        2,
+                        '.',
+                        ''
+                    ),
+                    '0'
+                ),
+                '.'
+            );
+
+
+            $stmt->bind_param(
+                'sii',
+                $hasil_db,
+                $id_peserta,
+                $id
+            );
+
+
+            if (!$stmt->execute()) {
+                throw new Exception(
+                    'Gagal memperbarui hasil training: ' . $stmt->error
+                );
+            }
+
+
+            $stmt->close();
+
+
+            /* ---------------------------------------------
+               2. CEK PENILAIAN SKILL YANG SUDAH ADA
+
+               Kunci pencarian:
+               - pekerja yang sama
+               - skill yang berasal dari training
+               - tahun training yang sama
+            --------------------------------------------- */
+
+            $stmt = $conn->prepare("
+                SELECT id
+                FROM penilaian_skill
+                WHERE id_pekerja = ?
+                  AND id_skill = ?
+                  AND tahun = ?
+                ORDER BY id DESC
+                LIMIT 1
+            ");
+
+
+            if (!$stmt) {
+                throw new Exception(
+                    'Gagal memeriksa penilaian skill: ' . $conn->error
+                );
+            }
+
+
+            $stmt->bind_param(
+                'iii',
+                $id,
+                $id_skill,
+                $tahun
+            );
+
+
+            if (!$stmt->execute()) {
+                throw new Exception(
+                    'Gagal memeriksa penilaian skill: ' . $stmt->error
+                );
+            }
+
+
+            $existing = $stmt->get_result()->fetch_assoc();
+            $stmt->close();
+
+
+            /* ---------------------------------------------
+               DATA PENILAIAN SKILL OTOMATIS
+            --------------------------------------------- */
+
+            $tanggal_penilaian = !empty($training['tanggal_mulai'])
+                ? $training['tanggal_mulai']
+                : date('Y-m-d');
+
+
+            $assessor = trim(
+                (string) ($training['trainer'] ?? '')
+            );
+
+
+            if ($assessor === '') {
+                $assessor = 'Training';
+            }
+
+
+            $catatan =
+                'Penilaian otomatis dari hasil training: ' .
+                $training['nama_training'];
+
+
+            /* ---------------------------------------------
+               3A. JIKA SUDAH ADA -> UPDATE
+            --------------------------------------------- */
+
+            if ($existing) {
+
+                $id_penilaian = (int) $existing['id'];
+
+
+                $stmt = $conn->prepare("
+                    UPDATE penilaian_skill
+                    SET
+                        nilai = ?,
+                        tanggal_penilaian = ?,
+                        assessor = ?,
+                        catatan = ?
+                    WHERE id = ?
+                      AND id_pekerja = ?
+                ");
+
+
+                if (!$stmt) {
+                    throw new Exception(
+                        'Gagal menyiapkan update penilaian skill: ' . $conn->error
+                    );
+                }
+
+
+                $stmt->bind_param(
+                    'dsssii',
+                    $hasil_nilai,
+                    $tanggal_penilaian,
+                    $assessor,
+                    $catatan,
+                    $id_penilaian,
+                    $id
+                );
+
+
+                if (!$stmt->execute()) {
+                    throw new Exception(
+                        'Gagal memperbarui penilaian skill: ' . $stmt->error
+                    );
+                }
+
+
+                $stmt->close();
+
+
+            /* ---------------------------------------------
+               3B. JIKA BELUM ADA -> INSERT
+            --------------------------------------------- */
+
+            } else {
+
+                $stmt = $conn->prepare("
+                    INSERT INTO penilaian_skill
+                    (
+                        id_pekerja,
+                        id_skill,
+                        tahun,
+                        nilai,
+                        tanggal_penilaian,
+                        assessor,
+                        catatan
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ");
+
+
+                if (!$stmt) {
+                    throw new Exception(
+                        'Gagal menyiapkan insert penilaian skill: ' . $conn->error
+                    );
+                }
+
+
+                $stmt->bind_param(
+                    'iiidsss',
+                    $id,
+                    $id_skill,
+                    $tahun,
+                    $hasil_nilai,
+                    $tanggal_penilaian,
+                    $assessor,
+                    $catatan
+                );
+
+
+                if (!$stmt->execute()) {
+                    throw new Exception(
+                        'Gagal menambahkan penilaian skill: ' . $stmt->error
+                    );
+                }
+
+
+                $stmt->close();
+            }
+
+
+            /* ---------------------------------------------
+               4. SEMUA BERHASIL -> COMMIT
+            --------------------------------------------- */
+
+            $conn->commit();
+
+
+            redirectDetail(
+                $id,
+                'training_updated',
+                'Hasil training berhasil diperbarui dan nilai skill otomatis tersinkron ke Riwayat Penilaian.',
+                $id_skill
+            );
+
+
+        } catch (Throwable $e) {
+
+            /* ---------------------------------------------
+               JIKA ADA SATU PROSES GAGAL -> ROLLBACK
+            --------------------------------------------- */
+
+            $conn->rollback();
+
+
+            redirectDetail(
+                $id,
+                'error',
+                $e->getMessage()
+            );
+        }
     }
 }
 
@@ -860,6 +1144,48 @@ if (!$pekerja) {
     header('Location: index.php');
 
     exit;
+}
+
+
+/* =========================================================
+   NOMOR REGISTRASI / ID YANG DITAMPILKAN
+
+   $id adalah primary key internal untuk URL dan relasi database.
+   Yang ditampilkan ke user harus nomor registrasi pekerja, bukan
+   primary key tersebut. Nilai TIDAK di-cast ke integer supaya
+   leading zero seperti 00807788 tetap tampil.
+
+   Prioritas mengikuti nama kolom yang umum dipakai project.
+========================================================= */
+
+$no_reg_display = '';
+
+$no_reg_candidates = [
+    'no_reg',
+    'no_reg_id',
+    'nomor_reg',
+    'nomor_registrasi',
+    'no_registrasi',
+    'reg_id',
+    'register_id'
+];
+
+foreach ($no_reg_candidates as $column) {
+
+    if (array_key_exists($column, $pekerja) && $pekerja[$column] !== null) {
+
+        $value = trim((string) $pekerja[$column]);
+
+        if ($value !== '') {
+            $no_reg_display = $value;
+            break;
+        }
+    }
+}
+
+/* Fallback jika kolom nomor registrasi tidak ditemukan. */
+if ($no_reg_display === '') {
+    $no_reg_display = (string) $id;
 }
 
 
@@ -1315,6 +1641,7 @@ $training_data = [];
 $stmt_training = $conn->prepare("
     SELECT
         tp.*,
+        tp.id AS id_peserta,
         t.nama_training,
         t.tanggal_mulai,
         t.tanggal_selesai,
@@ -2446,7 +2773,7 @@ foreach ($candidate_columns as $candidate) {
         <div class="profile-info-item">
             <div class="profile-info-label">No. Reg / ID</div>
             <div class="profile-info-value">
-                <?= (int) $pekerja['id'] ?>
+                <?= e($no_reg_display) ?>
             </div>
         </div>
 
@@ -3417,7 +3744,7 @@ foreach ($candidate_columns as $candidate) {
                                         class="btn-skill-action btn-skill-edit"
                                         title="Edit hasil training"
                                         onclick="openEditTraining(
-                                            <?= (int) $training['id'] ?>,
+                                            <?= (int) $training['id_peserta'] ?>,
                                             <?= htmlspecialchars(
                                                 json_encode(
                                                     $hasil_training
@@ -4291,18 +4618,22 @@ foreach ($candidate_columns as $candidate) {
 
 
                     <input
-                        type="text"
+                        type="number"
                         name="hasil_training"
                         id="training_hasil"
                         class="form-control"
-                        placeholder="Contoh: 85 / Lulus / Kompeten"
+                        min="1"
+                        max="5"
+                        step="0.1"
+                        inputmode="decimal"
+                        placeholder="Masukkan nilai 1 - 5"
                     >
 
 
                     <div class="small text-muted mt-2">
 
-                        Nilai akan diperbarui langsung pada
-                        data peserta training.
+                        Nilai akan diperbarui pada data peserta training dan
+                        otomatis disinkronkan ke Riwayat Penilaian Skill.
 
                     </div>
 
